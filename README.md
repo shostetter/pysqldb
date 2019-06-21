@@ -24,7 +24,6 @@ it is not meant to be a full ORM, but to facilitate common database connection a
  1. TBD 
 
 ## TODO 
- 1. Fix new tables list - regex not working correctly 
  1. Export query results to csv
  1. Import csv to table
  1. Import shapefiles to PG
