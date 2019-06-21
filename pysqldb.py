@@ -96,8 +96,10 @@ class DbConnect:
         self.password = getpass.getpass('Password ({})'.format(
             self.database.lower()))
 
-    def query(self, query):
-        qry = Query(self, query)
+    def query(self, query, **kwargs):
+        strict = kwargs.get('strict', True)
+        permission = kwargs.get('permission', True)
+        qry = Query(self, query, strict=strict, permission=permission)
         self.queries.append(qry)
 
     def dfquery(self, query):
@@ -143,8 +145,6 @@ class Query:
         self.strict = kwargs.get('strict', True)
         self.comment = kwargs.get('comment', True)
         self.permission = kwargs.get('permission', True)
-        self.keep = kwargs.get('keep', False)
-        self.remove_date = kwargs.get('remove_date', datetime.date.today() + datetime.timedelta(days=7))
         self.query_start = datetime.datetime.now()
         self.query_end = datetime.datetime.now()
         self.query_time = None
@@ -187,10 +187,7 @@ class Query:
             self.new_tables = self.query_creates_table()
         else:
             self.query_data(cur)
-        # write new tables to log
-        self.remove_log()
-        # drop any tables previously added in log
-        self.cleanup_log()
+
 
     def dfquery(self):
         """
@@ -203,6 +200,7 @@ class Query:
         # Cannot use pd.read_sql() because the structure will necessitate running query twice
         # once when Query is initially created and again to query for the df,
         # so this is a work around for pyodbc
+        df = None
         if self.dbo.type == 'MS':
             self.data = [tuple(i) for i in self.data]
             df = pd.DataFrame(self.data, columns=self.data_columns)
@@ -225,18 +223,16 @@ class Query:
         :return: list of sets of {[schema.]table}
         """
         new_tables = list()
-        create_table = r'(create\s+table\s+)((\w+\.\w+)|(\w+))'
+        create_table = r'(create table\s+)(\[?[\w]*\]?[.]?\[?[\w]*\]?\.?\[?[\w]*\]?([\w]*\]?))'
         matches = re.findall(create_table, self.query_string.lower())
         # get all schema and table pairs remove create table match
         new_tables += [set(_[1:]) for _ in matches]
-        #select_into = r'(select\s+)((.+)|((.+)\n)+)(into)((\s+\w+\.\w+)|(\s+[^\.]\w+))'
         # adds catch for MS [database].[schema].[table]
-        select_into = r'(select\s+)((.+)|((.+)\n)+)(into)\s+(([^\s+]?\w+[^\s+]?\.)*([^\s+]?\w+[^\s+]?))'
+        select_into = r'(select[^\.]*into\s+)(\[?[\w]*\]?[.]?\[?[\w]*\]?\.?\[?[\w]*\]?([\w]*\]?))'
         matches = re.findall(select_into, self.query_string.lower())
-        # into is position 5 in regex match
-        new_tables += [set(_[6:]) for _ in matches]
+        # [[select ... into], [table], [misc]]
+        new_tables += [set(_[1:]) for _ in matches]
         # clean up
-
         for _ in new_tables:
             if '' in _:
                 _.remove('')
@@ -255,96 +251,4 @@ class Query:
                     u=self.dbo.user,
                     d=self.query_start.strftime('%Y-%m-%d %H:%M')
                 )
-                _ = Query(self.dbo, q)
-
-    def remove_log(self):
-        """
-        Logs new table attributes that have a remove_date 
-        :return: 
-        """
-        if not self.keep:
-            to_log = read_pickle()
-            if not to_log:
-                to_log = list()
-            for tbl in self.new_tables:
-                to_log.append({
-                    'table': tbl,
-                    'created': self.query_start,
-                    'removal': self.remove_date,
-                    'db_info': {
-                        'database': self.dbo.database,
-                        'server': self.dbo.server,
-                        'db_type': self.dbo.type,
-                        'user': self.dbo.user
-                    }
-                })
-        write_pickle(to_log)
-
-    def same_connection(self, db_info):
-        """
-        Checks if connection params match
-        :param db_info: 
-        :return: 
-        """
-        if {
-            'db_type': self.dbo.type,
-            'server': self.dbo.server,
-            'database': self.dbo.database,
-            'user': self.dbo.user
-        } == db_info:
-            return True
-        else:
-            return False
-
-    def cleanup_log(self):
-        new_log = list()
-        for tbl in read_pickle():
-            if tbl['removal'] < datetime.date.today() and self.same_connection(tbl['db_info']):
-                q = Query(self.dbo, "DROP TABLE IF EXISTS {}".format(tbl['table']))
-                print q
-            else:
-                new_log.append(tbl)
-        write_pickle(new_log)
-
-
-def write_pickle(data, data_file='to_remove.lg'):
-    ouf = open(data_file, 'w')
-    pickle.dump(data, ouf)
-    ouf.close()
-
-
-def read_pickle(data_file='to_remove.lg'):
-    # Read in existing queue
-    try:
-        inf = open(data_file)
-    except:
-        write_pickle([])
-        inf = open(data_file)
-    data = pickle.load(inf)
-    inf.close()
-    return data
-
-db = DbConnect(type='ms',
-                        database='RISCRASHDATA',
-                        server='dotdevgissql01',
-                        user='risadmin ',
-                        password='RISADMIN!')
-# db.dfquery("SELECT TOP 10 [NODEID] FROM [RISCRASHDATA].[dbo].[__bikesshare_p1_nodes]")
-# db.query("SELECT TOP 5 [Street],[FACILITYTY],[FACILITYCL] FROM [RISCRASHDATA].[dbo].[bike_lanes_15]")
-db.query("SELECT TOP 5 [Street],[FACILITYTY],[FACILITYCL] into [RISCRASHDATA].[dbo].[_test_bike_lanes_15] FROM [RISCRASHDATA].[dbo].[bike_lanes_15]")
-for q in db.queries: print q
-print q.new_tables
-
-db2 = DbConnect(type='pg',
-                      database='CRASHDATA',
-                      server='dotdevpgsql02',
-                      user='shostetter',
-                      password='Batavia79')
-sample_query2 = '''DROP TABLE IF EXISTS working.temp; 
-    SELECT nodeid, masterid, is_int, is_cntrln_int into
-    working.temp
-    FROM public.node WHERE nodeid=9033921;
-    '''
-db2.query(query=sample_query2)
-for q in db2.queries: print q
-print q.new_tables
+                _ = Query(self.dbo, q, strict=False)
