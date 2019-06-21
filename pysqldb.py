@@ -81,6 +81,13 @@ class DbConnect:
         :return: 
         """
         self.conn.close()
+        print 'Database connection ({typ}) to {db} on {srv} - user: {usr} \nConnection closed {dt}'.format(
+            typ=self.type,
+            db=self.database,
+            srv=self.server,
+            usr=self.user,
+            dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        )
 
     def get_credentials(self):
         print ('\nAdditional database connection details required:')
