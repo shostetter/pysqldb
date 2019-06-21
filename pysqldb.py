@@ -4,7 +4,6 @@ import getpass
 import datetime
 import re
 import sys
-import cPickle as pickle
 import pandas as pd
 
 
@@ -106,7 +105,8 @@ class DbConnect:
     def query(self, query, **kwargs):
         strict = kwargs.get('strict', True)
         permission = kwargs.get('permission', True)
-        qry = Query(self, query, strict=strict, permission=permission)
+        temp = kwargs.get('temp', False)
+        qry = Query(self, query, strict=strict, permission=permission, temp=temp)
         self.queries.append(qry)
 
     def dfquery(self, query):
@@ -144,7 +144,7 @@ class Query:
             strict (bool): If true will run sys.exit on failed query attempts 
             comment (bool): If true any new tables will automatically have a comment added to them
             permission (bool): description 
-            keep (bool): description
+            temp (bool): if True any new tables will be logged for deletion at a future date 
             remove_date (datetime.date): description
         """
         self.dbo = dbo
@@ -152,6 +152,7 @@ class Query:
         self.strict = kwargs.get('strict', True)
         self.comment = kwargs.get('comment', True)
         self.permission = kwargs.get('permission', True)
+        self.temp = kwargs.get('temp', False)
         self.query_start = datetime.datetime.now()
         self.query_end = datetime.datetime.now()
         self.query_time = None
