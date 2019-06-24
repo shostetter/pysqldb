@@ -213,6 +213,8 @@ class Query:
         if self.dbo.type == 'MS':
             self.data = [tuple(i) for i in self.data]
             df = pd.DataFrame(self.data, columns=self.data_columns)
+        else:
+            df = pd.DataFrame(self.data, columns=self.data_columns)
         return df
 
     def query_data(self, cur):
