@@ -1,7 +1,7 @@
 import cPickle as pickle
 import datetime
 
-def write_pickle(data, data_file='to_remove.lg'):
+def write_log(data, data_file='to_remove.lg'):
     """
     Write pickle data to log file 
     :param data: Dictionary with table name, created date, removal date, and database connection params 
@@ -13,7 +13,7 @@ def write_pickle(data, data_file='to_remove.lg'):
     ouf.close()
 
 
-def read_pickle(data_file='to_remove.lg'):
+def read_log(data_file='to_remove.lg'):
     """
     Read pickle data from log file
     :param data_file: tables to remove log file
@@ -23,14 +23,14 @@ def read_pickle(data_file='to_remove.lg'):
     try:
         inf = open(data_file)
     except:
-        write_pickle([])
+        write_log([])
         inf = open(data_file)
     data = pickle.load(inf)
     inf.close()
     return data
 
 
-def log_table(query, remove_date=datetime.date.today() + datetime.timedelta(days=-1)):
+def log_table(query, remove_date=datetime.date.today() + datetime.timedelta(days=7)):
     """
     Log tables for deletion. 
     Assumes the log file will never get very large  
@@ -40,7 +40,7 @@ def log_table(query, remove_date=datetime.date.today() + datetime.timedelta(days
     """
     if query.temp:
         # get existing log
-        to_log = read_pickle()
+        to_log = read_log()
         for tbl in query.new_tables:
             # generate log data
             to_log.append({
@@ -55,7 +55,7 @@ def log_table(query, remove_date=datetime.date.today() + datetime.timedelta(days
                 }
             })
         # write back data to log
-        write_pickle(to_log)
+        write_log(to_log)
 
 
 def check_db_connection(query, db_info):
@@ -77,9 +77,12 @@ def check_db_connection(query, db_info):
 
 def cleanup_database(query, data_file='to_remove.lg'):
     new_log = list()
-    for tbl in read_pickle(data_file):
+    rp = read_log(data_file)
+    print '{} tables found in queue'.format(len(rp))
+    for tbl in rp:
         if tbl['removal'] < datetime.date.today():
             if check_db_connection(query, tbl['db_info']):
+                # new db connection
                 db2 = query.dbo.__class__(database=query.dbo.database,
                                           server=query.dbo.server,
                                           user=query.dbo.user,
@@ -87,15 +90,15 @@ def cleanup_database(query, data_file='to_remove.lg'):
                                           type=query.dbo.type)
                 try:
                     # Drop table from DB using a new DB connection so it doesnt block any other work if table is locked
-                    db2.query('DROP TABLE {}'.format(tbl['table']), strict=False)
+                    db2.query('DROP TABLE {}'.format(tbl['table']), strict=False, table_log=False)
                 except:
                     print 'Clean up failed {}'.format(tbl)
+                db2.disconnect(True)
         else:
             new_log.append(tbl)
-    print '{} tables still in queue'.format(len(new_log))
-    write_pickle(new_log)
-
-    db2.disconnect()
+    if len(new_log) > 0:
+        print '{} tables still in queue'.format(len(new_log))
+    write_log(new_log)
 
 
 def run_log_process(query):

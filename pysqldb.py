@@ -5,7 +5,7 @@ import datetime
 import re
 import sys
 import pandas as pd
-
+from table_log import *
 
 class DbConnect:
     def __init__(self, **kwargs):
@@ -107,7 +107,8 @@ class DbConnect:
         strict = kwargs.get('strict', True)
         permission = kwargs.get('permission', True)
         temp = kwargs.get('temp', False)
-        qry = Query(self, query, strict=strict, permission=permission, temp=temp)
+        table_log = kwargs.get('table_log', True)
+        qry = Query(self, query, strict=strict, permission=permission, temp=temp, table_log=table_log)
         self.queries.append(qry)
 
     def dfquery(self, query):
@@ -147,6 +148,7 @@ class Query:
             permission (bool): description 
             temp (bool): if True any new tables will be logged for deletion at a future date 
             remove_date (datetime.date): description
+            table_log: (bool): defaults to True, will log any new tables created and delete them once past removal date 
         """
         self.dbo = dbo
         self.query_string = query_string
@@ -154,6 +156,7 @@ class Query:
         self.comment = kwargs.get('comment', True)
         self.permission = kwargs.get('permission', True)
         self.temp = kwargs.get('temp', False)
+        self.table_log = kwargs.get('table_log', True)
         self.query_start = datetime.datetime.now()
         self.query_end = datetime.datetime.now()
         self.query_time = None
@@ -164,6 +167,7 @@ class Query:
         self.new_tables = list()
         self.query()
         self.auto_comment()
+        self.run_table_logging()
 
     def query(self):
         """
@@ -262,4 +266,8 @@ class Query:
                     u=self.dbo.user,
                     d=self.query_start.strftime('%Y-%m-%d %H:%M')
                 )
-                _ = Query(self.dbo, q, strict=False)
+                _ = Query(self.dbo, q, strict=False, table_log=False)
+
+    def run_table_logging(self):
+        if self.table_log:
+            run_log_process(self)
