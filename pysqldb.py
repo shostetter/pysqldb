@@ -138,7 +138,11 @@ class DbConnect:
         else:
             return 'varchar (500)'
 
-    def csv_to_table(self, input_file, schema='public'):
+    def csv_to_table(self, **kwargs):
+        input_file = kwargs.get('input_file', None)
+        schema = kwargs.get('schema', 'public')
+        if not input_file:
+            input_file = file_loc()
         # use pandas to get existing data and schema
         input_schema = list()
         df = pd.read_csv(input_file)
@@ -361,3 +365,13 @@ class Query:
             df.to_csv(output, index=False, quotechar="'", sep=sep)
         if open_file:
             os.startfile(output)
+
+
+def file_loc():
+    from Tkinter import Tk
+    from tkFileDialog import askopenfilename
+    import tkMessageBox
+    Tk().withdraw()
+    tkMessageBox.showinfo("Open file", "Please navigate to the Excel or CSV file you want to process")
+    filename = askopenfilename()
+    return filename
