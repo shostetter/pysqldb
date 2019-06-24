@@ -24,8 +24,7 @@ it is not meant to be a full ORM, but to facilitate common database connection a
  1. TBD 
 
 ## TODO 
- 1. Export query results to csv
- 1. Import csv to table
+ 1. Convert geom to WKT for export query results to csv
  1. Import shapefiles to PG
  1. Export query results to shapefile 
  1. Import/Export to File Geodatabases 

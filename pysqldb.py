@@ -4,8 +4,13 @@ import getpass
 import datetime
 import re
 import sys
+import os
+import csv
 import pandas as pd
+import numpy as np
+from tqdm import tqdm
 from table_log import *
+
 
 class DbConnect:
     def __init__(self, **kwargs):
@@ -73,6 +78,7 @@ class DbConnect:
                 self.params['DRIVER'] = 'SQL Server'
                 self.conn = pyodbc.connect(**self.params)
         self.connection_start = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print (self)
 
     def disconnect(self, quiet=False):
         """
@@ -115,6 +121,64 @@ class DbConnect:
         qry = Query(self, query)
         self.queries.append(qry)
         return qry.dfquery()
+
+    def type_decoder(self, typ):
+        """
+        Lazy type decoding from pandas to SQL.
+        This does not try to optimze for smallest size!
+        :param typ: Numpy dtype for column   
+        :return: 
+        """
+        if typ == np.dtype('M'):
+            return 'timestamp'
+        elif typ == np.dtype('int64'):
+            return 'bigint'
+        elif typ == np.dtype('float64'):
+            return 'float'
+        else:
+            return 'varchar (500)'
+
+    def csv_to_table(self, input_file, schema='public'):
+        # use pandas to get existing data and schema
+        input_schema = list()
+        df = pd.read_csv(input_file)
+        for col in df.dtypes.iteritems():
+            col_name, col_type = col[0], self.type_decoder(col[1])
+            input_schema.append([col_name, col_type])
+        # create table in database
+        table_name = os.path.basename(input_file).split('.')[0]
+        qry = """
+            CREATE TABLE {s}.{t} (
+            {cols}
+            )
+        """.format(s=schema, t=table_name, cols=str(['{c} {t},'.format(
+            c=i[0], t=i[1]) for i in input_schema])[1:-1].replace("'", "").replace(',,', ',')[:-1])
+        self.query(qry.replace('\n', ' '))
+
+        # insert data
+        print 'Reading data into Database\n'
+        for _, row in tqdm(df.iterrows()):
+            row = row.replace({pd.np.nan: None})  # clean up empty cells
+            self.query("""
+                INSERT INTO {s}.{t} ({cols})
+                VALUES ({d})
+            """.format(s=schema, t=table_name, cols=str([i[0] for i in input_schema])[1:-1].replace("'", ''),
+                       d=str([(lambda x: int(x) if type(x) == long else x)(i) for i in row.values])[1:-1].replace(
+                           'None', 'NULL')), strict=False, table_log=False)
+
+        df = self.dfquery("SELECT COUNT(*) as cnt FROM {s}.{t}".format(s=schema, t=table_name))
+        print '\n{c} rows added to {s}.{t}\n'.format(c=df.cnt.values[0], s=schema, t=table_name)
+
+    def query_to_csv(self, query, **kwargs):
+        strict = kwargs.get('strict', True)
+        output = kwargs.get('output',
+                            os.path.join(os.getcwd(), 'data_{}.csv'.format(
+                                datetime.datetime.now().strftime('%Y%m%d%H%M'))))
+        open_file = kwargs.get('open_file', False)
+        sep = kwargs.get('sep', ',')
+        quote_strings = kwargs.get('quote_strings', False)
+        qry = Query(self, query, strict=strict, table_log=False)
+        qry.query_to_csv(output=output, open_file=open_file, quote_strings=quote_strings, sep=sep)
 
 
 class Query:
@@ -201,7 +265,6 @@ class Query:
         else:
             self.query_data(cur)
 
-
     def dfquery(self):
         """
         Runs SQL query - only availible for select queries  
@@ -269,5 +332,32 @@ class Query:
                 _ = Query(self.dbo, q, strict=False, table_log=False)
 
     def run_table_logging(self):
+        """
+        Logs new tables and runs clean up on any existing tables in the log file
+        :return: 
+        """
         if self.table_log:
             run_log_process(self)
+
+    def query_to_csv(self, **kwargs):
+        """
+        Writes results of the query to a csv file
+        :param output: String for csv output file location (defaults to current directory)
+        :param open_file: Boolean flag to auto open output file    
+        :return: 
+        """
+        output = kwargs.get('output',
+                            os.path.join(os.getcwd(), 'data_{}.csv'.format(
+                                datetime.datetime.now().strftime('%Y%m%d%H%M'))))
+        open_file = kwargs.get('open_file', False)
+        quote_strings = kwargs.get('quote_strings', False)
+        sep = kwargs.get('sep', ',')
+
+        df = self.dfquery()
+        # TODO: convert geom to well known string for outputs
+        if quote_strings:
+            df.to_csv(output, index=False, quotechar="'", quoting=csv.QUOTE_NONNUMERIC, sep=sep)
+        else:
+            df.to_csv(output, index=False, quotechar="'", sep=sep)
+        if open_file:
+            os.startfile(output)
