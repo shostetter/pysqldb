@@ -74,19 +74,20 @@ class DbConnect:
                 self.conn = pyodbc.connect(**self.params)
         self.connection_start = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    def disconnect(self):
+    def disconnect(self, quiet=False):
         """
         Closes connection to DB
         :return: 
         """
         self.conn.close()
-        print 'Database connection ({typ}) to {db} on {srv} - user: {usr} \nConnection closed {dt}'.format(
-            typ=self.type,
-            db=self.database,
-            srv=self.server,
-            usr=self.user,
-            dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        )
+        if not quiet:
+            print 'Database connection ({typ}) to {db} on {srv} - user: {usr} \nConnection closed {dt}'.format(
+                typ=self.type,
+                db=self.database,
+                srv=self.server,
+                usr=self.user,
+                dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            )
 
     def get_credentials(self):
         print ('\nAdditional database connection details required:')
