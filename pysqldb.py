@@ -138,6 +138,27 @@ class DbConnect:
         else:
             return 'varchar (500)'
 
+    def clean_cell(self, x):
+        if type(x) == long:
+            return int(x)
+        elif type(x) == unicode or type(x) == str:
+            if "'" in x:
+                return str(x).replace("'", " ")
+            if u'\xa0' in x:
+                return str(x.replace(u'\xa0', ' '))
+            return str(x)  # .replace(u'\xa0', u' ')
+        elif type(x) == datetime.date:
+            return x.strftime('%Y-%m-%d')
+        elif type(x) == datetime.datetime:
+            return x.strftime('%Y-%m-%d %H:%M')
+        elif type(x) == datetime.datetime:
+            return x.strftime('%Y-%m-%d %H:%M')
+        elif type(x) == pd.tslib.Timestamp:
+            x.to_pydatetime()
+            return x.strftime('%Y-%m-%d %H:%M')
+        else:
+            return x
+
     def csv_to_table(self, **kwargs):
         input_file = kwargs.get('input_file', None)
         schema = kwargs.get('schema', 'public')
@@ -155,8 +176,8 @@ class DbConnect:
             CREATE TABLE {s}.{t} (
             {cols}
             )
-        """.format(s=schema, t=table_name, cols=str(['{c} {t},'.format(
-            c=i[0], t=i[1]) for i in input_schema])[1:-1].replace("'", "").replace(',,', ',')[:-1])
+        """.format(s=schema, t=table_name, cols=str(['"'+str(i[0])+'" ' + i[1] for i in input_schema]
+                                                    )[1:-1].replace("'", ""))
         self.query(qry.replace('\n', ' '))
 
         # insert data
@@ -167,7 +188,7 @@ class DbConnect:
                 INSERT INTO {s}.{t} ({cols})
                 VALUES ({d})
             """.format(s=schema, t=table_name, cols=str([i[0] for i in input_schema])[1:-1].replace("'", ''),
-                       d=str([(lambda x: int(x) if type(x) == long else x)(i) for i in row.values])[1:-1].replace(
+                       d=str([self.clean_cell(i) for i in row.values])[1:-1].replace(
                            'None', 'NULL')), strict=False, table_log=False)
 
         df = self.dfquery("SELECT COUNT(*) as cnt FROM {s}.{t}".format(s=schema, t=table_name))
