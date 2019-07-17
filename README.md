@@ -28,3 +28,4 @@ it is not meant to be a full ORM, but to facilitate common database connection a
  1. Import shapefiles to PG
  1. Export query results to shapefile 
  1. Import/Export to File Geodatabases 
+ 1. Fix temp table log write directory
