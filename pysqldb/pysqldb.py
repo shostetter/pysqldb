@@ -393,6 +393,6 @@ def file_loc():
     from tkFileDialog import askopenfilename
     import tkMessageBox
     Tk().withdraw()
-    tkMessageBox.showinfo("Open file", "Please navigate to the Excel or CSV file you want to process")
+    tkMessageBox.showinfo("Open file", "Please navigate to the CSV file you want to process")
     filename = askopenfilename()
     return filename
