@@ -326,12 +326,12 @@ class Query:
         :return: list of sets of {[schema.]table}
         """
         new_tables = list()
-        create_table = r'(create table\s+)(\[?[\w]*\]?[.]?\[?[\w]*\]?\.?\[?[\w]*\]?([\w]*\]?))'
+        create_table = r'(create table\s+)(\[?[\w]*\]?[.]?\"?\[?[\w]*\]?\.?\[?[\w]*\"?\]?([\w]*\]?))'
         matches = re.findall(create_table, self.query_string.lower())
         # get all schema and table pairs remove create table match
         new_tables += [set(_[1:]) for _ in matches]
         # adds catch for MS [database].[schema].[table]
-        select_into = r'(select[^\.]*into\s+)(\[?[\w]*\]?[.]?\[?[\w]*\]?\.?\[?[\w]*\]?([\w]*\]?))'
+        select_into = r'(select[^\.]*into\s+)(\[?[\w]*\]?[.]?\"?\[?[\w]*\]?\.?\[?[\w]*\"?\]?([\w]*\]?))'
         matches = re.findall(select_into, self.query_string.lower())
         # [[select ... into], [table], [misc]]
         new_tables += [set(_[1:]) for _ in matches]
