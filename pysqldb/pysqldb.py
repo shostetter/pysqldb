@@ -175,11 +175,12 @@ class DbConnect:
         table_name = os.path.basename(input_file).split('.')[0]
         if overwrite:
             qry = """
-            DROP TABLE IF EXISTS {s}.{t} (
+            DROP TABLE {s}.{t} (
             {cols}
             )
         """.format(s=schema, t=table_name, cols=str(['"'+str(i[0])+'" ' + i[1] for i in input_schema]
                                                     )[1:-1].replace("'", ""))
+            self.query(qry.replace('\n', ' '), strict=False)
         qry = """
             CREATE TABLE {s}.{t} (
             {cols}
