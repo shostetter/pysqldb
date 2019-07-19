@@ -161,6 +161,7 @@ class DbConnect:
 
     def csv_to_table(self, **kwargs):
         input_file = kwargs.get('input_file', None)
+        overwrite = kwargs.get('overwrite', False)
         schema = kwargs.get('schema', 'public')
         if not input_file:
             input_file = file_loc()
@@ -172,6 +173,13 @@ class DbConnect:
             input_schema.append([col_name, col_type])
         # create table in database
         table_name = os.path.basename(input_file).split('.')[0]
+        if overwrite:
+            qry = """
+            DROP TABLE IF EXISTS {s}.{t} (
+            {cols}
+            )
+        """.format(s=schema, t=table_name, cols=str(['"'+str(i[0])+'" ' + i[1] for i in input_schema]
+                                                    )[1:-1].replace("'", ""))
         qry = """
             CREATE TABLE {s}.{t} (
             {cols}
@@ -187,7 +195,7 @@ class DbConnect:
             self.query("""
                 INSERT INTO {s}.{t} ({cols})
                 VALUES ({d})
-            """.format(s=schema, t=table_name, cols=str([i[0] for i in input_schema])[1:-1].replace("'", ''),
+            """.format(s=schema, t=table_name, cols=str(['"'+i[0]+'"' for i in input_schema])[1:-1].replace("'", ''),
                        d=str([self.clean_cell(i) for i in row.values])[1:-1].replace(
                            'None', 'NULL')), strict=False, table_log=False)
 
@@ -245,7 +253,7 @@ class Query:
         self.comment = kwargs.get('comment', True)
         self.permission = kwargs.get('permission', True)
         self.temp = kwargs.get('temp', False)
-        self.table_log = kwargs.get('table_log', True)
+        self.table_log = kwargs.get('table_log', False)
         self.query_start = datetime.datetime.now()
         self.query_end = datetime.datetime.now()
         self.query_time = None
