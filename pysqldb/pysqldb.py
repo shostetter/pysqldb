@@ -197,32 +197,35 @@ class DbConnect:
         e = d.replace(':', '_')
         return e
 
-    def csv_to_table(self, **kwargs):
+    def dataframe_to_table(self, df, table_name, **kwargs):
         """
-        Imports csv file to database. This uses pandas datatypes to generate the table schema. 
+        Translates Pandas DataFrame to database table. 
+        :param df: Pandas DataFrame to be added to database
+        :param table_name (str): Table name to be used in databse
         :param kwargs: 
-            input_file (str): File path to csv file
+            schema (str): Define schema, defaults to public (PG)/ dbo (MS)
             overwrite (bool): If table exists in database will overwrite 
+            
         :return: 
         """
-        input_file = kwargs.get('input_file', None)
         overwrite = kwargs.get('overwrite', False)
         schema = kwargs.get('schema', 'public')
-        if not input_file:
-            input_file = file_loc()
-        # use pandas to get existing data and schema
+        if self.type == 'MS':
+            schema = kwargs.get('schema', 'dbo')
         input_schema = list()
-        df = pd.read_csv(input_file)
+
+        # parse df for schema
         for col in df.dtypes.iteritems():
             col_name, col_type = col[0], self.type_decoder(col[1])
             input_schema.append([self.clean_column(col_name), col_type])
+        if self.type == 'PG':
+            it = ' IF EXISTS '
         # create table in database
-        table_name = os.path.basename(input_file).split('.')[0]
         if overwrite:
             qry = """
-            DROP TABLE {s}.{t}
-        """.format(s=schema, t=table_name)
-            self.query(qry.replace('\n', ' '), strict=False)
+            DROP TABLE {if_typ}{s}.{t}
+        """.format(s=schema, t=table_name, if_typ=it)
+            self.query(qry.replace('\n', ' '), strict=False)  # Fail if table not exists MS
         qry = """
             CREATE TABLE {s}.{t} (
             {cols}
@@ -244,6 +247,61 @@ class DbConnect:
 
         df = self.dfquery("SELECT COUNT(*) as cnt FROM {s}.{t}".format(s=schema, t=table_name))
         print '\n{c} rows added to {s}.{t}\n'.format(c=df.cnt.values[0], s=schema, t=table_name)
+
+    def csv_to_table(self, **kwargs):
+        """
+        Imports csv file to database. This uses pandas datatypes to generate the table schema. 
+        :param kwargs: 
+            input_file (str): File path to csv file
+            overwrite (bool): If table exists in database will overwrite 
+            schema (str): Define schema, defaults to public (PG)/ dbo (MS)
+            table_name: (str): name for database table
+        :return: 
+        """
+        input_file = kwargs.get('input_file', None)
+        overwrite = kwargs.get('overwrite', False)
+        schema = kwargs.get('schema', 'public')
+        table_name = kwargs.get('table_name', '_{u}_{d}'.format(
+            u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
+        if self.type == 'MS':
+            schema = kwargs.get('schema', 'dbo')
+        if not input_file:
+            input_file = file_loc()
+        # use pandas to get existing data and schema
+
+        df = pd.read_csv(input_file)
+        if not table_name:
+            table_name = os.path.basename(input_file).split('.')[0]
+        self.dataframe_to_table(df, table_name, overwrite=overwrite, schema=schema)
+
+    def xls_to_table(self, **kwargs):
+        """
+        Imports csv file to database. This uses pandas datatypes to generate the table schema. 
+        :param kwargs: 
+            input_file (str): File path to csv file
+            sheet_name : str, int, list, or None, default 0
+            overwrite (bool): If table exists in database will overwrite 
+            schema (str): Define schema, defaults to public (PG)/ dbo (MS)
+            table_name: (str): name for database table
+        :return: 
+        """
+        input_file = kwargs.get('input_file', None)
+        sheet_name = kwargs.get('sheet_name', 0)
+        overwrite = kwargs.get('overwrite', False)
+        table_name = kwargs.get('table_name', '_{u}_{d}'.format(
+            u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
+        schema = kwargs.get('schema', 'public')
+        if self.type == 'MS':
+            schema = kwargs.get('schema', 'dbo')
+        if not input_file:
+            input_file = file_loc()
+        # use pandas to get existing data and schema
+
+        df = pd.read_excel(input_file, sheet_name=sheet_name)
+        if not table_name:
+            table_name = os.path.basename(input_file).split('.')[0]
+        self.dataframe_to_table(df, table_name, overwrite=overwrite, schema=schema)
+
 
     def query_to_csv(self, query, **kwargs):
         """
