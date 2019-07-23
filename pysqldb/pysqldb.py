@@ -96,6 +96,10 @@ class DbConnect:
             )
 
     def get_credentials(self):
+        """
+        Requests any missing credentials needed for db connection 
+        :return: None
+        """
         print ('\nAdditional database connection details required:')
         if not self.type:
             self.type = raw_input('Database type (MS/PG)').upper()
@@ -110,14 +114,30 @@ class DbConnect:
             self.database.lower()))
 
     def query(self, query, **kwargs):
+        """
+            runs Query object from input SQL string and adds query to queries
+                :param query_string: String sql query to be run  
+                :param kwargs: 
+                    strict (bool): If true will run sys.exit on failed query attempts 
+                    comment (bool): If true any new tables will automatically have a comment added to them
+                    permission (bool): description 
+                    temp (bool): if True any new tables will be logged for deletion at a future date 
+                    remove_date (datetime.date): description
+                    table_log: (bool): defaults to True, will log any new tables created and delete them once past removal date 
+                """
         strict = kwargs.get('strict', True)
         permission = kwargs.get('permission', True)
         temp = kwargs.get('temp', False)
-        table_log = kwargs.get('table_log', True)
+        table_log = kwargs.get('table_log', False)
         qry = Query(self, query, strict=strict, permission=permission, temp=temp, table_log=table_log)
         self.queries.append(qry)
 
     def dfquery(self, query):
+        """
+        Returns dataframe of results of a SQL query. Will though an error if no data is returned
+        :param query: SQL statement 
+        :return: 
+        """
         qry = Query(self, query)
         self.queries.append(qry)
         return qry.dfquery()
@@ -139,6 +159,11 @@ class DbConnect:
             return 'varchar (500)'
 
     def clean_cell(self, x):
+        """
+        Formats csv cells for SQL to add to database
+        :param x: 
+        :return: 
+        """
         if type(x) == long:
             return int(x)
         elif type(x) == unicode or type(x) == str:
@@ -159,7 +184,27 @@ class DbConnect:
         else:
             return x
 
+    def clean_column(self, x):
+        """
+        Reformats column names to for database
+        :param x: column name
+        :return: Reformated column name
+        """
+        a = x.strip().lower()
+        b = a.replace(' ', '_')
+        c = b.replace('.', '')
+        d = c.replace('(s)', '')
+        e = d.replace(':', '_')
+        return e
+
     def csv_to_table(self, **kwargs):
+        """
+        Imports csv file to database. This uses pandas datatypes to generate the table schema. 
+        :param kwargs: 
+            input_file (str): File path to csv file
+            overwrite (bool): If table exists in database will overwrite 
+        :return: 
+        """
         input_file = kwargs.get('input_file', None)
         overwrite = kwargs.get('overwrite', False)
         schema = kwargs.get('schema', 'public')
@@ -170,7 +215,7 @@ class DbConnect:
         df = pd.read_csv(input_file)
         for col in df.dtypes.iteritems():
             col_name, col_type = col[0], self.type_decoder(col[1])
-            input_schema.append([col_name, col_type])
+            input_schema.append([self.clean_column(col_name), col_type])
         # create table in database
         table_name = os.path.basename(input_file).split('.')[0]
         if overwrite:
@@ -193,7 +238,7 @@ class DbConnect:
             self.query("""
                 INSERT INTO {s}.{t} ({cols})
                 VALUES ({d})
-            """.format(s=schema, t=table_name, cols=str(['"'+i[0]+'"' for i in input_schema])[1:-1].replace("'", ''),
+            """.format(s=schema, t=table_name, cols=str(['"'+str(i[0])+'"' for i in input_schema])[1:-1].replace("'", ''),
                        d=str([self.clean_cell(i) for i in row.values])[1:-1].replace(
                            'None', 'NULL')), strict=False, table_log=False)
 
@@ -201,6 +246,17 @@ class DbConnect:
         print '\n{c} rows added to {s}.{t}\n'.format(c=df.cnt.values[0], s=schema, t=table_name)
 
     def query_to_csv(self, query, **kwargs):
+        """
+        Exports query results to a csv file. 
+        :param query: SQL query as string type 
+        :param kwargs: 
+            sep: Deliniator
+            strict (bool): If true will run sys.exit on failed query attempts 
+            output: File path for csv file
+            open_file (bool): If true will auto open the output csv file when done   
+            
+        :return: 
+        """
         strict = kwargs.get('strict', True)
         output = kwargs.get('output',
                             os.path.join(os.getcwd(), 'data_{}.csv'.format(
@@ -239,7 +295,7 @@ class Query:
         :param query_string: String sql query to be run  
         :param kwargs: 
             strict (bool): If true will run sys.exit on failed query attempts 
-            comment (bool): If true any new tables will automatically have a comment added to them
+            comment (str): String to add to default comment
             permission (bool): description 
             temp (bool): if True any new tables will be logged for deletion at a future date 
             remove_date (datetime.date): description
@@ -248,10 +304,10 @@ class Query:
         self.dbo = dbo
         self.query_string = query_string
         self.strict = kwargs.get('strict', True)
-        self.comment = kwargs.get('comment', True)
         self.permission = kwargs.get('permission', True)
         self.temp = kwargs.get('temp', False)
         self.table_log = kwargs.get('table_log', False)
+        self.comment = kwargs.get('comment', '')
         self.query_start = datetime.datetime.now()
         self.query_end = datetime.datetime.now()
         self.query_time = None
@@ -298,10 +354,10 @@ class Query:
 
     def dfquery(self):
         """
-        Runs SQL query - only availible for select queries  
+        Runs SQL query - only available for select queries  
         stores data in Query class attribute 
         stores the query that was run in Query class attribute 
-        stores the query durration in Query class attribute 
+        stores the query duration in Query class attribute 
         :return: Pandas DataFrame of the results of the query 
         """
         # Cannot use pd.read_sql() because the structure will necessitate running query twice
@@ -352,13 +408,14 @@ class Query:
         Automatically generates comment for PostgreSQL tables if created with Query 
         :return: 
         """
-        if self.comment and self.dbo.type == 'PG':
+        if self.dbo.type == 'PG':
             for t in self.new_tables:
                 # tables in new_tables list will contain schema if provided, otherwise will default to public
-                q = """COMMENT ON TABLE {t} IS 'Created by {u} on {d}'""".format(
+                q = """COMMENT ON TABLE {t} IS 'Created by {u} on {d}\n{cmnt}'""".format(
                     t=t,
                     u=self.dbo.user,
-                    d=self.query_start.strftime('%Y-%m-%d %H:%M')
+                    d=self.query_start.strftime('%Y-%m-%d %H:%M'),
+                    cmnt=self.comment
                 )
                 _ = Query(self.dbo, q, strict=False, table_log=False)
 
