@@ -6,10 +6,10 @@ import re
 import sys
 import os
 import csv
+import subprocess
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from table_log import *
 
 
 class DbConnect:
@@ -201,11 +201,11 @@ class DbConnect:
         """
         Translates Pandas DataFrame to database table. 
         :param df: Pandas DataFrame to be added to database
-        :param table_name (str): Table name to be used in databse
+        :param table_name: Table name to be used in databse
         :param kwargs: 
             schema (str): Define schema, defaults to public (PG)/ dbo (MS)
             overwrite (bool): If table exists in database will overwrite 
-            
+
         :return: 
         """
         overwrite = kwargs.get('overwrite', False)
@@ -230,7 +230,7 @@ class DbConnect:
             CREATE TABLE {s}.{t} (
             {cols}
             )
-        """.format(s=schema, t=table_name, cols=str(['"'+str(i[0])+'" ' + i[1] for i in input_schema]
+        """.format(s=schema, t=table_name, cols=str(['"' + str(i[0]) + '" ' + i[1] for i in input_schema]
                                                     )[1:-1].replace("'", ""))
         self.query(qry.replace('\n', ' '))
 
@@ -241,7 +241,8 @@ class DbConnect:
             self.query("""
                 INSERT INTO {s}.{t} ({cols})
                 VALUES ({d})
-            """.format(s=schema, t=table_name, cols=str(['"'+str(i[0])+'"' for i in input_schema])[1:-1].replace("'", ''),
+            """.format(s=schema, t=table_name,
+                       cols=str(['"' + str(i[0]) + '"' for i in input_schema])[1:-1].replace("'", ''),
                        d=str([self.clean_cell(i) for i in row.values])[1:-1].replace(
                            'None', 'NULL')), strict=False, table_log=False)
 
@@ -302,17 +303,16 @@ class DbConnect:
             table_name = os.path.basename(input_file).split('.')[0]
         self.dataframe_to_table(df, table_name, overwrite=overwrite, schema=schema)
 
-
     def query_to_csv(self, query, **kwargs):
         """
         Exports query results to a csv file. 
         :param query: SQL query as string type 
         :param kwargs: 
-            sep: Deliniator
+            sep: Delimiter
             strict (bool): If true will run sys.exit on failed query attempts 
             output: File path for csv file
             open_file (bool): If true will auto open the output csv file when done   
-            
+
         :return: 
         """
         strict = kwargs.get('strict', True)
@@ -324,6 +324,19 @@ class DbConnect:
         quote_strings = kwargs.get('quote_strings', False)
         qry = Query(self, query, strict=strict, table_log=False)
         qry.query_to_csv(output=output, open_file=open_file, quote_strings=quote_strings, sep=sep)
+
+    def query_to_shp(self, query, **kwargs):
+        strict = kwargs.get('strict', True)
+        path = kwargs.get('path', os.getcwd())
+        shp_name = kwargs.get('shp_name', None)
+        cmd = kwargs.get('cmd', None)
+        gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
+        qry = Query(self, query, strict=strict, table_log=False)
+        qry.query_to_shp(path=path,
+                         query=query,
+                         shp_name=shp_name,
+                         cmd=cmd,
+                         gdal_data_loc=gdal_data_loc)
 
 
 class Query:
@@ -348,7 +361,7 @@ class Query:
 
     def __init__(self, dbo, query_string, **kwargs):
         """
-        
+
         :param dbo: DbConnect object 
         :param query_string: String sql query to be run  
         :param kwargs: 
@@ -403,7 +416,7 @@ class Query:
                 sys.exit()
 
         self.query_end = datetime.datetime.now()
-        self.query_time = self.query_end-self.query_start
+        self.query_time = self.query_end - self.query_start
         if cur.description is None:
             self.dbo.conn.commit()
             self.new_tables = self.query_creates_table()
@@ -508,6 +521,70 @@ class Query:
         if open_file:
             os.startfile(output)
 
+    def query_to_shp(self, **kwargs):
+        path = kwargs.get('path', os.getcwd())
+        query = self.query_string
+        shp_name = kwargs.get('shp_name', None)
+        cmd = kwargs.get('cmd', None)
+        gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
+        shp = Shapefile(self.dbo,
+                        path=path,
+                        query=query,
+                        shp_name=shp_name,
+                        cmd=cmd,
+                        gdal_data_loc=gdal_data_loc)
+        shp.write_shp()
+
+
+class Shapefile:
+    def __str__(self):
+        pass
+
+    def __init__(self, dbo, **kwargs):
+        self.dbo = dbo
+        self.path = kwargs.get('path', os.getcwd())
+        self.table = kwargs.get('table', None)
+        self.schema = kwargs.get('schema', 'public')
+        self.query = kwargs.get('query', None)
+        self.shp_name = kwargs.get('shp_name', None)
+        self.cmd = kwargs.get('cmd', None)
+        self.gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
+
+    def name_extension(self, name):
+        if '.shp' in name:
+            return name
+        else:
+            return name + '.shp'
+
+    def write_shp(self):
+        if self.table:
+            qry = "SELECT * FROM {s}.{t}".format(s=self.schema, t=self.table)
+        else:
+            qry = "SELECT * FROM ({q}) x".format(q=self.query)
+        if not self.cmd:
+            self.cmd = 'ogr2ogr -overwrite -f \"ESRI Shapefile\" \"{export_path}\{shpname}\" ' \
+                       'PG:"host={host} user={username} dbname={db} ' \
+                       'password={password}" -sql "{pg_sql_select}"'.format(export_path=self.path,
+                                                                            shpname=self.name_extension(self.shp_name),
+                                                                            host=self.dbo.server,
+                                                                            username=self.dbo.user,
+                                                                            db=self.dbo.database,
+                                                                            password='*' * len(self.dbo.password),
+                                                                            pg_sql_select=qry)
+        os.system(self.cmd.replace('{}'.format('*' * len(self.dbo.password)), self.dbo.password))
+        if self.table:
+            print '{t} shapefile \nwritten to: {p}\ngenerated from: {q}'.format(t=self.name_extension(self.shp_name),
+                                                                                p=self.path,
+                                                                                q=self.table)
+        else:
+            print '{t} shapefile \nwritten to: {p}\ngenerated from: {q}'.format(t=self.name_extension(self.shp_name),
+                                                                                p=self.path,
+                                                                                q=self.query)
+
+    def read_shp(self):
+        # TODO
+        pass
+
 
 def file_loc():
     from Tkinter import Tk
@@ -517,3 +594,22 @@ def file_loc():
     tkMessageBox.showinfo("Open file", "Please navigate to the CSV file you want to process")
     filename = askopenfilename()
     return filename
+
+########################################################################################################################
+############################################ TESTING ###################################################################
+########################################################################################################################
+# shp = Shapefile(db,shp_name='test', path=r'C:\Users\SHostetter\Desktop', query="select * from lion limit 5")
+
+import configparser
+config = configparser.ConfigParser()
+config.read(r'C:\Users\SHostetter\Desktop\GIT\pysql\db.cfg')
+db = DbConnect(type='postgres',
+               server=config['PG DB']['SERVER'],
+               database=config['PG DB']['DB_NAME'],
+               user=config['PG DB']['DB_USER'],
+               password=config['PG DB']['DB_PASSWORD']
+               )
+db.query_to_shp(
+    path=r'C:\Users\SHostetter\Desktop',
+    query="select * from lion limit 5",
+    shp_name='test')
