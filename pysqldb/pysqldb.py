@@ -116,14 +116,15 @@ class DbConnect:
     def query(self, query, **kwargs):
         """
             runs Query object from input SQL string and adds query to queries
-                :param query_string: String sql query to be run  
+                :param query: String sql query to be run  
                 :param kwargs: 
                     strict (bool): If true will run sys.exit on failed query attempts 
                     comment (bool): If true any new tables will automatically have a comment added to them
                     permission (bool): description 
                     temp (bool): if True any new tables will be logged for deletion at a future date 
                     remove_date (datetime.date): description
-                    table_log: (bool): defaults to True, will log any new tables created and delete them once past removal date 
+                    table_log: (bool): defaults to True, will log any new tables created and delete them 
+                                       once past removal date 
                 """
         strict = kwargs.get('strict', True)
         permission = kwargs.get('permission', True)
@@ -220,6 +221,8 @@ class DbConnect:
             input_schema.append([self.clean_column(col_name), col_type])
         if self.type == 'PG':
             it = ' IF EXISTS '
+        else:
+            it = ''
         # create table in database
         if overwrite:
             qry = """
@@ -267,7 +270,7 @@ class DbConnect:
         if self.type == 'MS':
             schema = kwargs.get('schema', 'dbo')
         if not input_file:
-            input_file = file_loc()
+            input_file = file_loc('file')
         # use pandas to get existing data and schema
 
         df = pd.read_csv(input_file)
@@ -295,7 +298,7 @@ class DbConnect:
         if self.type == 'MS':
             schema = kwargs.get('schema', 'dbo')
         if not input_file:
-            input_file = file_loc()
+            input_file = file_loc('file')
         # use pandas to get existing data and schema
 
         df = pd.read_excel(input_file, sheet_name=sheet_name)
@@ -327,7 +330,7 @@ class DbConnect:
 
     def query_to_shp(self, query, **kwargs):
         strict = kwargs.get('strict', True)
-        path = kwargs.get('path', os.getcwd())
+        path = kwargs.get('path', None)
         shp_name = kwargs.get('shp_name', None)
         cmd = kwargs.get('cmd', None)
         gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
@@ -495,14 +498,16 @@ class Query:
         Logs new tables and runs clean up on any existing tables in the log file
         :return: 
         """
-        if self.table_log:
-            run_log_process(self)
+        # if self.table_log:
+        #     run_log_process(self)
+        pass
 
     def query_to_csv(self, **kwargs):
         """
         Writes results of the query to a csv file
-        :param output: String for csv output file location (defaults to current directory)
-        :param open_file: Boolean flag to auto open output file    
+        :param kwargs:
+            output: String for csv output file location (defaults to current directory)
+            open_file: Boolean flag to auto open output file    
         :return: 
         """
         output = kwargs.get('output',
@@ -522,7 +527,7 @@ class Query:
             os.startfile(output)
 
     def query_to_shp(self, **kwargs):
-        path = kwargs.get('path', os.getcwd())
+        path = kwargs.get('path', None)
         query = self.query_string
         shp_name = kwargs.get('shp_name', None)
         cmd = kwargs.get('cmd', None)
@@ -542,7 +547,7 @@ class Shapefile:
 
     def __init__(self, dbo, **kwargs):
         self.dbo = dbo
-        self.path = kwargs.get('path', os.getcwd())
+        self.path = kwargs.get('path', None)
         self.table = kwargs.get('table', None)
         self.schema = kwargs.get('schema', 'public')
         self.query = kwargs.get('query', None)
@@ -561,6 +566,12 @@ class Shapefile:
             qry = "SELECT * FROM {s}.{t}".format(s=self.schema, t=self.table)
         else:
             qry = "SELECT * FROM ({q}) x".format(q=self.query)
+        if not self.shp_name:
+            output_file_name = file_loc('save')
+            self.shp_name = os.path.basename(output_file_name)
+            self.path = os.path.dirname(output_file_name)
+        if not self.path:
+            self.path = file_loc('folder')
         if not self.cmd:
             self.cmd = 'ogr2ogr -overwrite -f \"ESRI Shapefile\" \"{export_path}\{shpname}\" ' \
                        'PG:"host={host} user={username} dbname={db} ' \
@@ -581,19 +592,34 @@ class Shapefile:
                                                                                 p=self.path,
                                                                                 q=self.query)
 
-    def read_shp(self):
+    def read_shp(self, precision=False):
+        # TODO
+        pass
+
+    def read_feature_class(self):
         # TODO
         pass
 
 
-def file_loc():
+def file_loc(typ='file'):
     from Tkinter import Tk
-    from tkFileDialog import askopenfilename
-    import tkMessageBox
+    import tkFileDialog
+    # import tkMessageBox
     Tk().withdraw()
-    tkMessageBox.showinfo("Open file", "Please navigate to the CSV file you want to process")
-    filename = askopenfilename()
-    return filename
+    if typ == 'file':
+        # tkMessageBox.showinfo("Open file", "Please navigate to the file file you want to process")
+        filename = tkFileDialog.askopenfilename(title="Select file")
+        return filename
+    elif typ == 'folder':
+        folder = tkFileDialog.askdirectory(title="Select folder")
+        return folder
+    elif typ == 'save':
+        output_file_name = tkFileDialog.asksaveasfilename(
+            filetypes=(("Shapefile", "*.shp"), ("All Files", "*.*")),
+            defaultextension=".shp"
+        )
+        return output_file_name
+
 
 ########################################################################################################################
 ############################################ TESTING ###################################################################
@@ -609,7 +635,4 @@ db = DbConnect(type='postgres',
                user=config['PG DB']['DB_USER'],
                password=config['PG DB']['DB_PASSWORD']
                )
-db.query_to_shp(
-    path=r'C:\Users\SHostetter\Desktop',
-    query="select * from lion limit 5",
-    shp_name='test')
+db.query_to_shp(query="select * from lion limit 5")
