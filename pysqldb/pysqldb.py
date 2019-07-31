@@ -341,6 +341,37 @@ class DbConnect:
                          cmd=cmd,
                          gdal_data_loc=gdal_data_loc)
 
+    def import_shp(self, **kwargs):
+        dbo = kwargs.get('dbo', self)
+        path = kwargs.get('path', None)
+        table = kwargs.get('table', None)
+        schema = kwargs.get('schema', 'public')
+        query = kwargs.get('query', None)
+        shp_name = kwargs.get('shp_name', None)
+        cmd = kwargs.get('cmd', None)
+        srid = kwargs.get('srid', '2263')
+        gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
+        precision = kwargs.get('precision', False),
+        private = kwargs.get('private', False)
+        shp = Shapefile(dbo=dbo, path=path, table=table, schema=schema, query=query,
+                        shp_name=shp_name, cmd=cmd, srid=srid, gdal_data_loc=gdal_data_loc)
+        shp.read_shp(precision, private)
+
+    def import_feature_class(self, **kwargs):
+        dbo = kwargs.get('dbo', self)
+        path = kwargs.get('path', None)
+        table = kwargs.get('table', None)
+        schema = kwargs.get('schema', 'public')
+        query = kwargs.get('query', None)
+        shp_name = kwargs.get('shp_name', None)
+        cmd = kwargs.get('cmd', None)
+        srid = kwargs.get('srid', '2263')
+        gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
+        private = kwargs.get('private', False)
+        shp = Shapefile(dbo=dbo, path=path, table=table, schema=schema, query=query,
+                        shp_name=shp_name, cmd=cmd, srid=srid, gdal_data_loc=gdal_data_loc)
+        shp.read_feature_class(private)
+
 
 class Query:
     def __str__(self):
