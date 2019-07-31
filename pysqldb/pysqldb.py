@@ -545,15 +545,21 @@ class Shapefile:
     def __str__(self):
         pass
 
-    def __init__(self, dbo, **kwargs):
-        self.dbo = dbo
+    def __init__(self, **kwargs):
+        self.dbo = kwargs.get('dbo', None)
         self.path = kwargs.get('path', None)
         self.table = kwargs.get('table', None)
         self.schema = kwargs.get('schema', 'public')
         self.query = kwargs.get('query', None)
         self.shp_name = kwargs.get('shp_name', None)
         self.cmd = kwargs.get('cmd', None)
+        self.srid = kwargs.get('srid', '2263')
         self.gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
+        self.connect()
+
+    def connect(self):
+        if not self.dbo:
+            self.dbo = DbConnect()
 
     def name_extension(self, name):
         if '.shp' in name:
@@ -592,16 +598,134 @@ class Shapefile:
                                                                                 p=self.path,
                                                                                 q=self.query)
 
-    def read_shp(self, precision=False):
-        # TODO
-        pass
+    def table_exists(self):
+        # check if table exists
+        self.dbo.query("SELECT table_name FROM information_schema.tables WHERE table_schema = '{s}'".format(
+            s=self.schema))
+        if self.shp_name.replace('.shp', '').lower() in [i[0] for i in self.dbo.queries[-1].data]:
+            exists = True
+        else:
+            exists = False
+        return exists
 
-    def read_feature_class(self):
-        # TODO
-        pass
+    def del_indexes(self):
+        self.dbo.query("""
+            select 
+                t.relname as table_name, i.relname as index_name, a.attname as column_name
+            from
+                pg_class t, pg_class i, pg_index ix, pg_attribute a
+            where
+                t.oid = ix.indrelid
+                and i.oid = ix.indexrelid
+                and a.attrelid = t.oid
+                and a.attnum = ANY(ix.indkey)
+                and t.relkind = 'r'
+                and t.relname = '{t}'
+        """.format(
+                t=self.shp_name.replace('.shp', '').lower()))
+        idx = self.dbo.queries[-1].data
+        for row in idx:
+            if 'pkey' not in row[1]:
+                self.dbo.query('DROP INDEX IF EXISTS "{s}"."{i}"'.format(
+                    s=self.schema, i=row[1]
+                ), strict=False)
+
+    def read_shp(self, precision=False, private=False):
+        if precision:
+            precision = '-lco precision=NO'
+        else:
+            precision = ''
+        if not all([self.path, self.shp_name]):
+            filename = file_loc('file', 'Missing file info - Opening search dialog...')
+            self.shp_name = os.path.basename(filename)
+            self.path = os.path.dirname(filename)
+        if not self.table:
+            self.table = self.shp_name.replace('.shp', '').lower()
+
+        if self.table_exists():
+            # clean up spatial index
+            self.del_indexes()
+            print 'Deleting existing table {s}.{t}'.format(s=self.schema, t=self.table)
+            self.dbo.query("DROP TABLE IF EXISTS {s}.{t} CASCADE".format(s=self.schema, t=self.table))
+
+        cmd = 'ogr2ogr --config GDAL_DATA "{gdal_data}" -nlt PROMOTE_TO_MULTI -overwrite -a_srs ' \
+              'EPSG:{srid} -progress -f "PostgreSQL" PG:"host={host} port=5432 dbname={dbname} ' \
+              'user={user} password={password}" "{shp}" -nln {schema}.{tbl_name} {perc} '.format(
+                gdal_data=self.gdal_data_loc,
+                srid=self.srid,
+                host=self.dbo.server,
+                dbname=self.dbo.database,
+                user=self.dbo.user,
+                password=self.dbo.password,
+                shp=os.path.join(self.path, self.shp_name).lower(),
+                schema=self.schema,
+                tbl_name=self.table,
+                perc=precision
+                )
+
+        subprocess.call(cmd, shell=True)
+
+        self.dbo.query("""comment on table {s}."{t}" is '{t} created by {u} on {d}
+        - imported using pysql module -'""".format(
+            s=self.schema,
+            t=self.table,
+            u=self.dbo.user,
+            d=datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        ))
+
+        if not private:
+
+            self.dbo.query('grant all on {s}."{t}" to public;'.format(
+                s=self.schema,
+                t=self.table))
+
+    def read_feature_class(self, private=False):
+        if not all([self.path, self.shp_name]):
+            return 'Missing path and/or shp_name'
+        if not self.table:
+            self.table = self.shp_name.lower()
+
+        if self.table_exists():
+            # clean up spatial index
+            self.del_indexes()
+            print 'Deleting existing table {s}.{t}'.format(s=self.schema, t=self.table)
+            self.dbo.query("DROP TABLE IF EXISTS {s}.{t} CASCADE".format(s=self.schema, t=self.table))
+
+        cmd = 'ogr2ogr --config GDAL_DATA "{gdal_data}" -nlt PROMOTE_TO_MULTI -overwrite -a_srs ' \
+              'EPSG:{srid} -f "PostgreSQL" PG:"host={host} user={user} dbname={dbname} ' \
+              'password={password}" "{gdb}" "{feature}" -nln {sch}.{feature} -progress'.format(
+                gdal_data=self.gdal_data_loc,
+                srid=self.srid,
+                host=self.dbo.server,
+                dbname=self.dbo.database,
+                user=self.dbo.user,
+                password=self.dbo.password,
+                gdb=self.path,
+                feature=self.shp_name,
+                sch=self.schema
+                )
+        print cmd
+        subprocess.call(cmd, shell=True)
+
+        self.dbo.query("""comment on table {s}."{t}" is '{t} created by {u} on {d}
+               - imported using pysql module -'""".format(
+            s=self.schema,
+            t=self.table,
+            u=self.dbo.user,
+            d=datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        ))
+
+        if not private:
+            self.dbo.query('grant all on {s}."{t}" to public;'.format(
+                s=self.schema,
+                t=self.table))
 
 
-def file_loc(typ='file'):
+def file_loc(typ='file', print_message=None):
+    if not print_message:
+        print 'File/folder search dialog...'
+    else:
+        print print_message
     from Tkinter import Tk
     import tkFileDialog
     # import tkMessageBox
@@ -621,18 +745,3 @@ def file_loc(typ='file'):
         return output_file_name
 
 
-########################################################################################################################
-############################################ TESTING ###################################################################
-########################################################################################################################
-# shp = Shapefile(db,shp_name='test', path=r'C:\Users\SHostetter\Desktop', query="select * from lion limit 5")
-
-import configparser
-config = configparser.ConfigParser()
-config.read(r'C:\Users\SHostetter\Desktop\GIT\pysql\db.cfg')
-db = DbConnect(type='postgres',
-               server=config['PG DB']['SERVER'],
-               database=config['PG DB']['DB_NAME'],
-               user=config['PG DB']['DB_USER'],
-               password=config['PG DB']['DB_PASSWORD']
-               )
-db.query_to_shp(query="select * from lion limit 5")
