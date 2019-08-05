@@ -864,34 +864,70 @@ def log_temp_table(dbo, schema, table, owner, expiration=datetime.datetime.now()
                     table_schema varchar,
                     table_name varchar,
                     created_on timestamp, 
-                    expires date
+                    expires date, 
+                    primary key (table_schema, table_name)
                     )
                 """.format(s=schema, log=log_table), timeme=False)
+    # Upsert syntax for different DB types
+    pg_upsert = """
+    
+    """
     # add new table to log
     if table != log_table:
-        dbo.query("""
-            INSERT INTO {s}.{log} (
-                table_owner,
-                table_schema,
-                table_name,
-                created_on , 
-                expires
-            )
-            VALUES (
-                '{u}',
-                '{s}',
-                '{t}',
-                '{dt}',
-                '{ex}'
-            )
-        """.format(
-            s=schema,
-            log=log_table,
-            u=owner,
-            t=table,
-            dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-            ex=expiration
-        ), strict=False, timeme=False)
+        if dbo.type == 'PG':
+            dbo.query("""
+                INSERT INTO {s}.{log} (
+                    table_owner,
+                    table_schema,
+                    table_name,
+                    created_on , 
+                    expires
+                )
+                VALUES (
+                    '{u}',
+                    '{s}',
+                    '{t}',
+                    '{dt}',
+                    '{ex}'
+                )
+            ON CONFLICT (table_schema, table_name) DO 
+            UPDATE SET expires = EXCLUDED.expires, created_on=EXCLUDED.created_on
+            """.format(
+                s=schema,
+                log=log_table,
+                u=owner,
+                t=table,
+                dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                ex=expiration,
+                upsert=pg_upsert
+            ), strict=False, timeme=False)
+        elif dbo.type == 'MS':
+            dbo.query("""
+            MERGE dbo.__temp_log_table_risadmin__ AS [Target] 
+            USING (
+                SELECT 
+                    '{u} 'as table_owner,
+                    '{s}' as table_schema,
+                    '{t}' as table_name,
+                    '{dt}' as created_on , 
+                    '{ex}' as expires
+            ) AS [Source] ON [Target].table_schema = [Source].table_schema 
+                and [Target].table_name = [Source].table_name 
+            WHEN MATCHED THEN UPDATE 
+                SET [Target].created_on = [Source].created_on,
+                [Target].expires = [Source].expires
+            WHEN NOT MATCHED THEN INSERT (table_owner, table_schema, table_name, created_on, expires) 
+                VALUES ([Source].table_owner, [Source].table_schema, [Source].table_name, 
+                    [Source].created_on, [Source].expires);
+            """.format(
+                s=schema,
+                log=log_table,
+                u=owner,
+                t=table,
+                dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                ex=expiration,
+                upsert=pg_upsert
+            ), strict=False, timeme=False)
 
 
 def clean_up_from_log(dbo, schema, owner):
