@@ -128,16 +128,13 @@ class DbConnect:
                     permission (bool): description 
                     temp (bool): if True any new tables will be logged for deletion at a future date 
                     remove_date (datetime.date): description
-                    table_log: (bool): defaults to True, will log any new tables created and delete them 
-                                       once past removal date 
                 """
         strict = kwargs.get('strict', True)
         permission = kwargs.get('permission', True)
-        temp = kwargs.get('temp', False)
-        table_log = kwargs.get('table_log', False)
+        temp = kwargs.get('temp', True)
         timeme = kwargs.get('timeme', True)
         no_comment = kwargs.get('no_comment', False)
-        qry = Query(self, query, strict=strict, permission=permission, temp=temp, table_log=table_log,
+        qry = Query(self, query, strict=strict, permission=permission, temp=temp,
                     timeme=timeme, no_comment=no_comment)
         self.queries.append(qry)
         self.refresh_connection()
@@ -258,7 +255,7 @@ class DbConnect:
             """.format(s=schema, t=table_name,
                        cols=str(['"' + str(i[0]) + '"' for i in input_schema])[1:-1].replace("'", ''),
                        d=str([self.clean_cell(i) for i in row.values])[1:-1].replace(
-                           'None', 'NULL')), strict=False, table_log=False, timeme=False)
+                           'None', 'NULL')), strict=False, timeme=False)
 
         df = self.dfquery("SELECT COUNT(*) as cnt FROM {s}.{t}".format(s=schema, t=table_name), timeme=False)
         print '\n{c} rows added to {s}.{t}\n'.format(c=df.cnt.values[0], s=schema, t=table_name)
@@ -336,7 +333,7 @@ class DbConnect:
         open_file = kwargs.get('open_file', False)
         sep = kwargs.get('sep', ',')
         quote_strings = kwargs.get('quote_strings', False)
-        qry = Query(self, query, strict=strict, table_log=False)
+        qry = Query(self, query, strict=strict)
         qry.query_to_csv(output=output, open_file=open_file, quote_strings=quote_strings, sep=sep)
 
     def query_to_shp(self, query, **kwargs):
@@ -345,7 +342,7 @@ class DbConnect:
         shp_name = kwargs.get('shp_name', None)
         cmd = kwargs.get('cmd', None)
         gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
-        qry = Query(self, query, strict=strict, table_log=False)
+        qry = Query(self, query, strict=strict)
         qry.query_to_shp(path=path,
                          query=query,
                          shp_name=shp_name,
@@ -414,15 +411,13 @@ class Query:
             comment (str): String to add to default comment
             permission (bool): description 
             temp (bool): if True any new tables will be logged for deletion at a future date 
-            remove_date (datetime.date): description
-            table_log: (bool): defaults to True, will log any new tables created and delete them once past removal date 
+            remove_date (datetime.date): description 
         """
         self.dbo = dbo
         self.query_string = query_string
         self.strict = kwargs.get('strict', True)
         self.permission = kwargs.get('permission', True)
-        self.temp = kwargs.get('temp', False)
-        self.table_log = kwargs.get('table_log', False)
+        self.temp = kwargs.get('temp', True)
         self.comment = kwargs.get('comment', '')
         self.no_comment = kwargs.get('no_comment', False)
         self.timeme = kwargs.get('timeme', True)
@@ -553,32 +548,30 @@ class Query:
                     d=self.query_start.strftime('%Y-%m-%d %H:%M'),
                     cmnt=self.comment
                 )
-                _ = Query(self.dbo, q, strict=False, table_log=False, timeme=False)
+                _ = Query(self.dbo, q, strict=False, timeme=False)
 
     def run_table_logging(self):
         """
         Logs new tables and runs clean up on any existing tables in the log file
         :return: 
         """
-        for table in self.new_tables:
-            # print table
-            if '.' in table:
-                log_temp_table(self.dbo,
-                               table.split('.')[0],
-                               table.split('.')[1],
-                               self.dbo.user)
-            else:
-                if self.dbo.type == 'MS':
-                    default_schema = 'dbo'
+        if self.temp:
+            for table in self.new_tables:
+                # print table
+                if '.' in table:
+                    log_temp_table(self.dbo,
+                                   table.split('.')[0],
+                                   table.split('.')[1],
+                                   self.dbo.user)
                 else:
-                    default_schema = 'public'
-                log_temp_table(self.dbo,
-                               default_schema,
-                               table,
-                               self.dbo.user)
-
-
-        pass
+                    if self.dbo.type == 'MS':
+                        default_schema = 'dbo'
+                    else:
+                        default_schema = 'public'
+                    log_temp_table(self.dbo,
+                                   default_schema,
+                                   table,
+                                   self.dbo.user)
 
     def query_to_csv(self, **kwargs):
         """
