@@ -35,7 +35,7 @@ class DbConnect:
             dt=self.connection_start
         )
 
-    def connect(self):
+    def connect(self, quiet=False):
         """
         Connects to database
         Requires all connection parameters to be entered and connection type
@@ -78,7 +78,8 @@ class DbConnect:
                 self.params['DRIVER'] = 'SQL Server'
                 self.conn = pyodbc.connect(**self.params)
         self.connection_start = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print (self)
+        if not quiet:
+            print (self)
 
     def disconnect(self, quiet=False):
         """
@@ -94,6 +95,10 @@ class DbConnect:
                 usr=self.user,
                 dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             )
+
+    def refresh_connection(self):
+        self.disconnect(True)
+        self.connect(True)
 
     def get_credentials(self):
         """
@@ -130,17 +135,23 @@ class DbConnect:
         permission = kwargs.get('permission', True)
         temp = kwargs.get('temp', False)
         table_log = kwargs.get('table_log', False)
-        qry = Query(self, query, strict=strict, permission=permission, temp=temp, table_log=table_log)
+        timeme = kwargs.get('timeme', True)
+        no_comment = kwargs.get('no_comment', False)
+        qry = Query(self, query, strict=strict, permission=permission, temp=temp, table_log=table_log,
+                    timeme=timeme, no_comment=no_comment)
         self.queries.append(qry)
+        self.refresh_connection()
 
-    def dfquery(self, query):
+    def dfquery(self, query, timeme=False):
         """
         Returns dataframe of results of a SQL query. Will though an error if no data is returned
         :param query: SQL statement 
+        :param timeme: default to False, adds timing to query run
         :return: 
         """
-        qry = Query(self, query)
+        qry = Query(self, query, timeme=timeme)
         self.queries.append(qry)
+        self.refresh_connection()
         return qry.dfquery()
 
     def type_decoder(self, typ):
@@ -228,14 +239,14 @@ class DbConnect:
             qry = """
             DROP TABLE {if_typ}{s}.{t}
         """.format(s=schema, t=table_name, if_typ=it)
-            self.query(qry.replace('\n', ' '), strict=False)  # Fail if table not exists MS
+            self.query(qry.replace('\n', ' '), strict=False, timeme=False)  # Fail if table not exists MS
         qry = """
             CREATE TABLE {s}.{t} (
             {cols}
             )
         """.format(s=schema, t=table_name, cols=str(['"' + str(i[0]) + '" ' + i[1] for i in input_schema]
                                                     )[1:-1].replace("'", ""))
-        self.query(qry.replace('\n', ' '))
+        self.query(qry.replace('\n', ' '), timeme=False)
 
         # insert data
         print 'Reading data into Database\n'
@@ -247,9 +258,9 @@ class DbConnect:
             """.format(s=schema, t=table_name,
                        cols=str(['"' + str(i[0]) + '"' for i in input_schema])[1:-1].replace("'", ''),
                        d=str([self.clean_cell(i) for i in row.values])[1:-1].replace(
-                           'None', 'NULL')), strict=False, table_log=False)
+                           'None', 'NULL')), strict=False, table_log=False, timeme=False)
 
-        df = self.dfquery("SELECT COUNT(*) as cnt FROM {s}.{t}".format(s=schema, t=table_name))
+        df = self.dfquery("SELECT COUNT(*) as cnt FROM {s}.{t}".format(s=schema, t=table_name), timeme=False)
         print '\n{c} rows added to {s}.{t}\n'.format(c=df.cnt.values[0], s=schema, t=table_name)
 
     def csv_to_table(self, **kwargs):
@@ -413,6 +424,8 @@ class Query:
         self.temp = kwargs.get('temp', False)
         self.table_log = kwargs.get('table_log', False)
         self.comment = kwargs.get('comment', '')
+        self.no_comment = kwargs.get('no_comment', False)
+        self.timeme = kwargs.get('timeme', True)
         self.query_start = datetime.datetime.now()
         self.query_end = datetime.datetime.now()
         self.query_time = None
@@ -424,6 +437,15 @@ class Query:
         self.query()
         self.auto_comment()
         self.run_table_logging()
+
+    def query_time_format(self):
+        if self.query_time.seconds < 60:
+            if self.query_time.seconds < 1:
+                return 'Query run in {} microseconds'.format(self.query_time.microseconds)
+            else:
+                return 'Query run in {} seconds'.format(self.query_time.seconds)
+        else:
+            return 'Query run in {} seconds'.format(self.query_time)
 
     def query(self):
         """
@@ -448,14 +470,20 @@ class Query:
             cur = self.dbo.conn.cursor()
             if self.strict:
                 sys.exit()
-
+            else:
+                # reset connection
+                self.dbo.disconnect()
+                self.dbo.connect()
         self.query_end = datetime.datetime.now()
         self.query_time = self.query_end - self.query_start
+        if self.timeme:
+            print self.query_time_format()
         if cur.description is None:
             self.dbo.conn.commit()
             self.new_tables = self.query_creates_table()
         else:
             self.query_data(cur)
+
 
     def dfquery(self):
         """
@@ -506,14 +534,17 @@ class Query:
         for _ in new_tables:
             if '' in _:
                 _.remove('')
-        return [i.pop() for i in new_tables]
+        if new_tables and new_tables != [set()]:
+            return [i.pop() for i in new_tables]
+        else:
+            return []
 
     def auto_comment(self):
         """
         Automatically generates comment for PostgreSQL tables if created with Query 
         :return: 
         """
-        if self.dbo.type == 'PG':
+        if self.dbo.type == 'PG' and not self.no_comment:
             for t in self.new_tables:
                 # tables in new_tables list will contain schema if provided, otherwise will default to public
                 q = """COMMENT ON TABLE {t} IS 'Created by {u} on {d}\n{cmnt}'""".format(
@@ -522,15 +553,31 @@ class Query:
                     d=self.query_start.strftime('%Y-%m-%d %H:%M'),
                     cmnt=self.comment
                 )
-                _ = Query(self.dbo, q, strict=False, table_log=False)
+                _ = Query(self.dbo, q, strict=False, table_log=False, timeme=False)
 
     def run_table_logging(self):
         """
         Logs new tables and runs clean up on any existing tables in the log file
         :return: 
         """
-        # if self.table_log:
-        #     run_log_process(self)
+        for table in self.new_tables:
+            # print table
+            if '.' in table:
+                log_temp_table(self.dbo,
+                               table.split('.')[0],
+                               table.split('.')[1],
+                               self.dbo.user)
+            else:
+                if self.dbo.type == 'MS':
+                    default_schema = 'dbo'
+                else:
+                    default_schema = 'public'
+                log_temp_table(self.dbo,
+                               default_schema,
+                               table,
+                               self.dbo.user)
+
+
         pass
 
     def query_to_csv(self, **kwargs):
@@ -558,12 +605,12 @@ class Query:
             os.startfile(output)
 
     def query_to_shp(self, **kwargs):
+        query = kwargs.get('query', self.query_string)
         path = kwargs.get('path', None)
-        query = self.query_string
         shp_name = kwargs.get('shp_name', None)
         cmd = kwargs.get('cmd', None)
         gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
-        shp = Shapefile(self.dbo,
+        shp = Shapefile(dbo=self.dbo,
                         path=path,
                         query=query,
                         shp_name=shp_name,
@@ -775,4 +822,99 @@ def file_loc(typ='file', print_message=None):
         )
         return output_file_name
 
+
+def log_temp_table(dbo, schema, table, owner, expiration=datetime.datetime.now() + datetime.timedelta(days=7)):
+    log_table = '__temp_log_table_{}__'.format(owner)
+    # check if log exists if not make one
+    if dbo.type == 'MS':
+        dbo.query("""
+                SELECT * 
+                FROM sys.tables t 
+                JOIN sys.schemas s 
+                ON t.schema_id = s.schema_id
+                WHERE s.name = '{s}' AND t.name = '{log}'
+            """.format(s=schema, log=log_table), timeme=False)
+        if not dbo.queries[-1].data:
+            dbo.query("""
+                CREATE TABLE {s}.{log} (
+                    tbl_id int IDENTITY(1,1) PRIMARY KEY,
+                    table_owner varchar(255),
+                    table_schema varchar(255),
+                    table_name varchar(255),
+                    created_on datetime, 
+                    expires date
+                )
+            """.format(s=schema, log=log_table), timeme=False)
+    elif dbo.type == 'PG':
+        # useed the check rather than create if not exists because it was breaking my auto_comment
+        dbo.query("""
+            SELECT EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_tables
+            WHERE schemaname = '{s}'
+            AND tablename = '{log}'
+            )        
+        """.format(s=schema, log=log_table), timeme=False)
+        x = dbo.queries[-1].data[0][0]
+        if not x:
+            dbo.query("""
+                CREATE TABLE {s}.{log}  (
+                    tbl_id SERIAL,
+                    table_owner varchar,
+                    table_schema varchar,
+                    table_name varchar,
+                    created_on timestamp, 
+                    expires date
+                    )
+                """.format(s=schema, log=log_table), timeme=False)
+    # add new table to log
+    if table != log_table:
+        dbo.query("""
+            INSERT INTO {s}.{log} (
+                table_owner,
+                table_schema,
+                table_name,
+                created_on , 
+                expires
+            )
+            VALUES (
+                '{u}',
+                '{s}',
+                '{t}',
+                '{dt}',
+                '{ex}'
+            )
+        """.format(
+            s=schema,
+            log=log_table,
+            u=owner,
+            t=table,
+            dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+            ex=expiration
+        ), strict=False, timeme=False)
+
+
+def clean_up_from_log(dbo, schema, owner):
+    log_table = '__temp_log_table_{}__'.format(owner)
+    dbo.query("""
+        SELECT table_schema, table_name FROM {s}.{l}
+        WHERE expires < '{dt}'
+        """.format(
+        s=schema,
+        l=log_table,
+        dt=datetime.datetime.now().strftime('%Y-%m-%d')
+    ), timeme=False)
+    to_clean = dbo.queries[-1].data
+    for sch, table in tqdm(to_clean):
+        dbo.query('DROP TABLE {}.{}'.format(sch, table), strict=False, timeme=False, no_comment=True)
+        clean_out_log(dbo, sch, table, owner)
+
+
+def clean_out_log(dbo, schema, table, owner):
+    dbo.query("DELETE FROM {ls}.{lt} where table_schema='{ts}' and table_name='{tn}'".format(
+        ls=schema,
+        lt='__temp_log_table_{}__'.format(owner),
+        ts=schema,
+        tn=table
+        ), strict=False, timeme=False, no_comment=True)
 
