@@ -178,9 +178,15 @@ class DbConnect:
             return float(x)
         elif type(x) == unicode or type(x) == str:
             if "'" in x:
-                return str(x).replace("'", " ")
+                x = str(x).replace("'", " ")
             if u'\xa0' in x:
-                return str(x.replace(u'\xa0', ' '))
+                x = str(x.replace(u'\xa0', ' '))
+            if u"\u2019" in x:
+                x = str(x.replace(u"\u2019", "'"))
+            if u"\u2018" in x:
+                x = str(x.replace(u"\u2019", "'"))
+            if "'" in x:
+                x = x.replace("'", '-qte-chr-')
             return str(x)  # .replace(u'\xa0', u' ')
         elif type(x) == datetime.date:
             return x.strftime('%Y-%m-%d')
@@ -456,6 +462,7 @@ class Query:
         cur = self.dbo.conn.cursor()
         self.query_string = self.query_string.replace('%', '%%')
         self.query_string = self.query_string.replace('-pct-', '%')
+        self.query_string = self.query_string.replace('-qte-chr-', "''")
         try:
             cur.execute(self.query_string)
         except:
