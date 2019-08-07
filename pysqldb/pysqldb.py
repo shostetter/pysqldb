@@ -25,6 +25,7 @@ class DbConnect:
         self.queries = list()
         self.connection_start = None
         self.connect()
+        # TODO: add auto cleanup clean_up_from_log(db, schema, user)
 
     def __str__(self):
         return 'Database connection ({typ}) to {db} on {srv} - user: {usr} \nConnection established {dt}'.format(
@@ -174,7 +175,7 @@ class DbConnect:
         :return: 
         """
         if type(x) == long:
-            return int(x)
+            return float(x)
         elif type(x) == unicode or type(x) == str:
             if "'" in x:
                 return str(x).replace("'", " ")
@@ -302,9 +303,10 @@ class DbConnect:
         overwrite = kwargs.get('overwrite', False)
         table_name = kwargs.get('table_name', '_{u}_{d}'.format(
             u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
-        schema = kwargs.get('schema', 'public')
         if self.type == 'MS':
             schema = kwargs.get('schema', 'dbo')
+        else:
+            schema = kwargs.get('schema', 'public')
         if not input_file:
             input_file = file_loc('file')
         # use pandas to get existing data and schema
@@ -478,7 +480,6 @@ class Query:
             self.new_tables = self.query_creates_table()
         else:
             self.query_data(cur)
-
 
     def dfquery(self):
         """
@@ -861,10 +862,6 @@ def log_temp_table(dbo, schema, table, owner, expiration=datetime.datetime.now()
                     primary key (table_schema, table_name)
                     )
                 """.format(s=schema, log=log_table), timeme=False)
-    # Upsert syntax for different DB types
-    pg_upsert = """
-    
-    """
     # add new table to log
     if table != log_table:
         if dbo.type == 'PG':
@@ -891,8 +888,7 @@ def log_temp_table(dbo, schema, table, owner, expiration=datetime.datetime.now()
                 u=owner,
                 t=table,
                 dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-                ex=expiration,
-                upsert=pg_upsert
+                ex=expiration
             ), strict=False, timeme=False)
         elif dbo.type == 'MS':
             dbo.query("""
@@ -918,8 +914,7 @@ def log_temp_table(dbo, schema, table, owner, expiration=datetime.datetime.now()
                 u=owner,
                 t=table,
                 dt=datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-                ex=expiration,
-                upsert=pg_upsert
+                ex=expiration
             ), strict=False, timeme=False)
 
 
@@ -946,4 +941,3 @@ def clean_out_log(dbo, schema, table, owner):
         ts=schema,
         tn=table
         ), strict=False, timeme=False, no_comment=True)
-
