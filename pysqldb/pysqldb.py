@@ -25,6 +25,7 @@ class DbConnect:
         self.queries = list()
         self.connection_start = None
         self.connect()
+        self.clean_logs()
         # TODO: add auto cleanup clean_up_from_log(db, schema, user)
 
     def __str__(self):
@@ -228,6 +229,7 @@ class DbConnect:
         schema = kwargs.get('schema', 'public')
         if self.type == 'MS':
             schema = kwargs.get('schema', 'dbo')
+        temp = kwargs.get('temp', True)
         input_schema = list()
 
         # parse df for schema
@@ -250,7 +252,7 @@ class DbConnect:
             )
         """.format(s=schema, t=table_name, cols=str(['"' + str(i[0]) + '" ' + i[1] for i in input_schema]
                                                     )[1:-1].replace("'", ""))
-        self.query(qry.replace('\n', ' '), timeme=False)
+        self.query(qry.replace('\n', ' '), timeme=False, temp=temp)
 
         # insert data
         print 'Reading data into Database\n'
@@ -282,6 +284,7 @@ class DbConnect:
         schema = kwargs.get('schema', 'public')
         table_name = kwargs.get('table_name', '_{u}_{d}'.format(
             u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
+        temp = kwargs.get('temp', True)
         if self.type == 'MS':
             schema = kwargs.get('schema', 'dbo')
         if not input_file:
@@ -291,7 +294,7 @@ class DbConnect:
         df = pd.read_csv(input_file)
         if not table_name:
             table_name = os.path.basename(input_file).split('.')[0]
-        self.dataframe_to_table(df, table_name, overwrite=overwrite, schema=schema)
+        self.dataframe_to_table(df, table_name, overwrite=overwrite, schema=schema, temp=temp)
 
     def xls_to_table(self, **kwargs):
         """
@@ -309,6 +312,7 @@ class DbConnect:
         overwrite = kwargs.get('overwrite', False)
         table_name = kwargs.get('table_name', '_{u}_{d}'.format(
             u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
+        temp = kwargs.get('temp', True)
         if self.type == 'MS':
             schema = kwargs.get('schema', 'dbo')
         else:
@@ -320,7 +324,7 @@ class DbConnect:
         df = pd.read_excel(input_file, sheet_name=sheet_name)
         if not table_name:
             table_name = os.path.basename(input_file).split('.')[0]
-        self.dataframe_to_table(df, table_name, overwrite=overwrite, schema=schema)
+        self.dataframe_to_table(df, table_name, overwrite=overwrite, schema=schema, temp=temp)
 
     def query_to_csv(self, query, **kwargs):
         """
@@ -331,7 +335,7 @@ class DbConnect:
             strict (bool): If true will run sys.exit on failed query attempts 
             output: File path for csv file
             open_file (bool): If true will auto open the output csv file when done   
-
+            quote_strings (bool): if true will use quote strings 
         :return: 
         """
         strict = kwargs.get('strict', True)
@@ -345,6 +349,17 @@ class DbConnect:
         qry.query_to_csv(output=output, open_file=open_file, quote_strings=quote_strings, sep=sep)
 
     def query_to_shp(self, query, **kwargs):
+        """
+                    Exports query results to a shp file. 
+                    :param query: SQL query as string type 
+                    :param kwargs: 
+                        strict (bool): If true will run sys.exit on failed query attempts 
+                        path: folder path for output shp
+                        shp_name: file name for shape (should end in '.shp'
+                        cmd: GDAL command line script that can be used to override default
+                        gdal_data_loc: path to gdal data, if not stored in system env correctly
+                    :return: 
+                """
         strict = kwargs.get('strict', True)
         path = kwargs.get('path', None)
         shp_name = kwargs.get('shp_name', None)
@@ -387,6 +402,53 @@ class DbConnect:
         shp = Shapefile(dbo=dbo, path=path, table=table, schema=schema, query=query,
                         shp_name=shp_name, cmd=cmd, srid=srid, gdal_data_loc=gdal_data_loc)
         shp.read_feature_class(private)
+
+    def clean_logs(self):
+        log_table = '__temp_log_table_{}__'.format(self.user)
+        if self.type == 'PG':
+            self.query(" SELECT schema_name FROM information_schema.schemata", timeme=False)
+            for sch in self.queries[-1].data:
+                schema = sch[0]
+                # check if log table exists
+                self.query("""
+                            SELECT EXISTS (
+                            SELECT 1
+                            FROM pg_catalog.pg_tables
+                            WHERE schemaname = '{s}'
+                            AND tablename = '{log}'
+                            )        
+                        """.format(s=schema, log=log_table), timeme=False)
+                x = self.queries[-1].data[0][0]
+                if x:
+                    clean_up_from_log(self, schema, self.user)
+        elif self.type == 'MS':
+            self.query("""
+                select s.name as schema_name, 
+                    s.schema_id,
+                    u.name as schema_owner
+                from sys.schemas s
+                    inner join sys.sysusers u
+                        on u.uid = s.principal_id
+                where u.name not like 'db_%' 
+                    and u.name != 'INFORMATION_SCHEMA' 
+                    and u.name != 'sys'
+                    and u.name != 'guest'
+                order by s.schema_id
+                """)
+            for sch in self.queries[-1].data:
+                schema = sch[0]
+                # check if log table exists
+                self.query("""
+                                SELECT * 
+                                FROM sys.tables t 
+                                JOIN sys.schemas s 
+                                ON t.schema_id = s.schema_id
+                                WHERE s.name = '{s}' AND t.name = '{log}'
+                            """.format(s=schema, log=log_table), timeme=False)
+                if self.queries[-1].data:
+                    x = self.queries[-1].data[0][0]
+                    if x:
+                        clean_up_from_log(self, schema, self.user)
 
 
 class Query:
@@ -948,3 +1010,92 @@ def clean_out_log(dbo, schema, table, owner):
         ts=schema,
         tn=table
         ), strict=False, timeme=False, no_comment=True)
+
+
+def pg_to_sql(pg, ms, org_table, **kwargs):
+    """
+    Migrates tables from Postgres to SQL Server, generates spatial tables in MS if spatial in PG.
+    :param pg: DbConnect instance connecting to PostgreSQL source database
+    :param ms: DbConnect instance connecting to SQL Server destination database
+    :param org_table: table name of table to migrate
+    :param kwargs: 
+        :org_schema: PostgreSQL schema for origin table (defaults to public)
+        :dest_schema: SQL Server schema for destination table (defaults to dbo) 
+    :return: 
+    """
+    spatial = kwargs.get('spatial', False)
+    org_schema = kwargs.get('org_schema', 'public')
+    org_table = kwargs.get('org_table', False)
+    dest_schema = kwargs.get('dest_schema', 'dbo')
+    if spatial:
+        spatial = '-a_srs EPSG:2263 '
+    else:
+        spatial = ' '
+    cmd = """
+    ogr2ogr -overwrite -update -f MSSQLSpatial "MSSQL:server={ms_server};database={ms_db};UID={ms_user};PWD={ms_pass}" 
+    -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} user={pg_user} password={pg_pass}" 
+    {pg_schema}.{pg_table} -lco OVERWRITE=yes -lco SCHEMA={ms_schema} {spatial}-progress
+    """.format(
+        ms_pass=ms.password,
+        ms_user=ms.user,
+        pg_pass=pg.password,
+        pg_user=pg.user,
+        ms_server=ms.server,
+        ms_db=ms.database,
+        pg_host=pg.server,
+        pg_port=pg.port,
+        pg_database=pg.database,
+        pg_schema=org_schema,
+        pg_table=org_table,
+        ms_schema=dest_schema,
+        spatial=spatial
+    )
+
+    subprocess.call(cmd.replace('\n', ' '), shell=True)
+
+
+def sql_to_pg(ms, pg, org_table, **kwargs):
+    """    
+    Migrates tables from SQL Server to PostgreSQL, generates spatial tables in PG if spatial in MS.
+    :param ms: DbConnect instance connecting to SQL Server destination database
+    :param pg: DbConnect instance connecting to PostgreSQL source database
+    :param org_table: table name of table to migrate
+    :param kwargs: 
+        :org_schema: SQL Server schema for origin table (defaults to dbo) 
+        :dest_schema: PostgreSQL schema for destination table (defaults to public)
+    :return: 
+    """
+    spatial = kwargs.get('spatial', False)
+    org_schema = kwargs.get('org_schema', False)
+    org_table = kwargs.get('org_table', False)
+    dest_schema = kwargs.get('dest_schema', False)
+    if spatial:
+        # This flag isnt working, but data is being interpreted correctly
+        # spatial = '-a_srs EPSG:2263 '
+        spatial = ' '
+    else:
+        spatial = ' '
+    cmd = """
+    ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
+    user={pg_user} password={pg_pass}" -f MSSQLSpatial "MSSQL:server={ms_server};database={ms_database};
+    UID={ms_user};PWD={ms_pass}" {ms_schema}.{ms_table} -lco OVERWRITE=yes 
+    -lco SCHEMA={pg_schema} {spatial}-progress
+    """.format(
+        ms_pass=ms.password,
+        ms_user=ms.user,
+        pg_pass=pg.password,
+        pg_user=pg.user,
+        ms_server=ms.server,
+        ms_db=ms.database,
+        pg_host=pg.server,
+        pg_port=pg.port,
+        ms_database=ms.database,
+        pg_database=pg.database,
+        pg_schema=dest_schema,
+        pg_table=org_table,
+        ms_table=org_table,
+        ms_schema=org_schema,
+        spatial=spatial
+    )
+
+    subprocess.call(cmd.replace('\n', ' '), shell=True)
