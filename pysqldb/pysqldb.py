@@ -1153,15 +1153,3 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
     )
 
     subprocess.call(cmd.replace('\n', ' '), shell=True)
-
-
-import configparser
-config = configparser.ConfigParser()
-    config.read('db.cfg')
-
-    db = DbConnect(type='postgres',
-                   server=config['PG DB']['SERVER'],
-                   database=config['PG DB']['DB_NAME'],
-                   user=config['PG DB']['DB_USER'],
-                   password=config['PG DB']['DB_PASSWORD']
-                   )
