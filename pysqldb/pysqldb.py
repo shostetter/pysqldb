@@ -547,6 +547,9 @@ class Query:
         if cur.description is None:
             self.dbo.conn.commit()
             self.new_tables = self.query_creates_table()
+            if self.permission:
+                for t in self.new_tables:
+                    self.dbo.query('grant all on {t} to public;'.format(t=t))
         else:
             self.query_data(cur)
 
@@ -998,9 +1001,13 @@ def clean_up_from_log(dbo, schema, owner):
         dt=datetime.datetime.now().strftime('%Y-%m-%d')
     ), timeme=False)
     to_clean = dbo.queries[-1].data
-    for sch, table in tqdm(to_clean):
+    cleaned = 0
+    for sch, table in to_clean:
         dbo.query('DROP TABLE {}.{}'.format(sch, table), strict=False, timeme=False, no_comment=True)
         clean_out_log(dbo, sch, table, owner)
+        cleaned += 1
+    if cleaned > 0:
+        'Removed {} temp tables'.format(cleaned)
 
 
 def clean_out_log(dbo, schema, table, owner):
@@ -1010,6 +1017,55 @@ def clean_out_log(dbo, schema, table, owner):
         ts=schema,
         tn=table
         ), strict=False, timeme=False, no_comment=True)
+
+#
+# def pg_to_pg(pg, org_table, **kwargs):
+#     """
+#     Migrates tables from Postgres to SQL Server, generates spatial tables in MS if spatial in PG.
+#     :param pg: DbConnect instance connecting to PostgreSQL source database
+#     :param org_table: table name of table to migrate
+#     :param kwargs:
+#         :pg2: DbConnect instance connecting to PostgreSQL destination database if different from source
+#         :org_schema: PostgreSQL schema for origin table (defaults to public)
+#         :dest_schema: PostgreSQL schema for destination table (defaults to dbo)
+#     :return:
+#     """
+#     spatial = kwargs.get('spatial', False)
+#     pg2 = kwargs.get('pg2', pg)
+#     org_schema = kwargs.get('org_schema', 'public')
+#     dest_schema = kwargs.get('dest_schema', 'dbo')
+#     if spatial:
+#         spatial = '-a_srs EPSG:2263 '
+#     else:
+#         spatial = ' '
+#     cmd = """
+#     ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database}
+#     user={pg_user} password={pg_pass}"
+#     -f "PostgreSQL" PG:"host={pg_host2} port={pg_port2} dbname={pg_database2}
+#     user={pg_user2} password={pg_pass2}"
+#     {pg_schema}.{pg_table} -lco OVERWRITE=yes
+#     -lco SCHEMA={pg_schema2} {spatial}-progress
+#     """.format(
+#         pg_pass=pg.password,
+#         pg_user=pg.user,
+#         pg_host=pg.server,
+#         pg_port=pg.port,
+#         pg_database=pg.database,
+#         pg_schema=org_schema,
+#         pg_table=org_table,
+#
+#         pg_pass2=pg2.password,
+#         pg_user2=pg2.user,
+#         pg_host2=pg2.server,
+#         pg_port2=pg2.port,
+#         pg_database2=pg2.database,
+#         pg_schema2=dest_schema,
+#
+#         spatial=spatial
+#     )
+#     print cmd
+#
+#     subprocess.call(cmd.replace('\n', ' '), shell=True)
 
 
 def pg_to_sql(pg, ms, org_table, **kwargs):
@@ -1025,7 +1081,6 @@ def pg_to_sql(pg, ms, org_table, **kwargs):
     """
     spatial = kwargs.get('spatial', False)
     org_schema = kwargs.get('org_schema', 'public')
-    org_table = kwargs.get('org_table', False)
     dest_schema = kwargs.get('dest_schema', 'dbo')
     if spatial:
         spatial = '-a_srs EPSG:2263 '
@@ -1066,9 +1121,8 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
     :return: 
     """
     spatial = kwargs.get('spatial', False)
-    org_schema = kwargs.get('org_schema', False)
-    org_table = kwargs.get('org_table', False)
-    dest_schema = kwargs.get('dest_schema', False)
+    org_schema = kwargs.get('org_schema', 'dbo')
+    dest_schema = kwargs.get('dest_schema', 'public')
     if spatial:
         # This flag isnt working, but data is being interpreted correctly
         # spatial = '-a_srs EPSG:2263 '
@@ -1099,3 +1153,15 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
     )
 
     subprocess.call(cmd.replace('\n', ' '), shell=True)
+
+
+import configparser
+config = configparser.ConfigParser()
+    config.read('db.cfg')
+
+    db = DbConnect(type='postgres',
+                   server=config['PG DB']['SERVER'],
+                   database=config['PG DB']['DB_NAME'],
+                   user=config['PG DB']['DB_USER'],
+                   password=config['PG DB']['DB_PASSWORD']
+                   )
