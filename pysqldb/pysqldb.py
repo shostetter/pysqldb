@@ -190,7 +190,7 @@ class DbConnect:
         :return: 
         """
         if pd.isnull(x):
-            return 'NULL'
+            return None
         if type(x) == long:
             return float(x)
         if type(x) == decimal.Decimal:
