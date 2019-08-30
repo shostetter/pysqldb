@@ -10,7 +10,21 @@ import subprocess
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+import decimal
 
+#TODO: when tables are renamed indexes remain - causing failures with GDAL
+#TODO: option 1: check for indexes with relevant table name and drop them
+#TODO: option 2: add regex for renaming table and check for associated indecies and rename them then
+# SELECT
+#     tablename,
+#     indexname,
+#     indexdef
+# FROM
+#     pg_indexes
+# WHERE
+#     schemaname = 'working'
+# ORDER BY
+#         indexname;
 
 class DbConnect:
     def __init__(self, **kwargs):
@@ -175,7 +189,11 @@ class DbConnect:
         :param x: 
         :return: 
         """
+        if pd.isnull(x):
+            return 'NULL'
         if type(x) == long:
+            return float(x)
+        if type(x) == decimal.Decimal:
             return float(x)
         elif type(x) == unicode or type(x) == str:
             if "'" in x:
@@ -207,6 +225,8 @@ class DbConnect:
         :param x: column name
         :return: Reformated column name
         """
+        if type(x) == int:
+            x = str(x)
         a = x.strip().lower()
         b = a.replace(' ', '_')
         c = b.replace('.', '')
@@ -549,7 +569,7 @@ class Query:
             self.new_tables = self.query_creates_table()
             if self.permission:
                 for t in self.new_tables:
-                    self.dbo.query('grant all on {t} to public;'.format(t=t))
+                    self.dbo.query('grant all on {t} to public;'.format(t=t), timeme=False)
         else:
             self.query_data(cur)
 
