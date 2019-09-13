@@ -392,7 +392,7 @@ class DbConnect:
                          cmd=cmd,
                          gdal_data_loc=gdal_data_loc)
 
-    def import_shp(self, **kwargs):
+    def shp_to_table(self, **kwargs):
         dbo = kwargs.get('dbo', self)
         path = kwargs.get('path', None)
         table = kwargs.get('table', None)
@@ -408,7 +408,7 @@ class DbConnect:
                         shp_name=shp_name, cmd=cmd, srid=srid, gdal_data_loc=gdal_data_loc)
         shp.read_shp(precision, private)
 
-    def import_feature_class(self, **kwargs):
+    def feature_class_to_table(self, **kwargs):
         dbo = kwargs.get('dbo', self)
         path = kwargs.get('path', None)
         table = kwargs.get('table', None)
@@ -1097,11 +1097,13 @@ def pg_to_sql(pg, ms, org_table, **kwargs):
     :param kwargs: 
         :org_schema: PostgreSQL schema for origin table (defaults to public)
         :dest_schema: SQL Server schema for destination table (defaults to dbo) 
+        :print_cmd: Option to print he ogr2ogr command line statement (defaults to False) - used for debugging
     :return: 
     """
     spatial = kwargs.get('spatial', False)
     org_schema = kwargs.get('org_schema', 'public')
     dest_schema = kwargs.get('dest_schema', 'dbo')
+    print_cmd = kwargs.get('print_cmd', False)
     if spatial:
         spatial = '-a_srs EPSG:2263 '
     else:
@@ -1125,7 +1127,8 @@ def pg_to_sql(pg, ms, org_table, **kwargs):
         ms_schema=dest_schema,
         spatial=spatial
     )
-
+    if print_cmd:
+        print cmd
     subprocess.call(cmd.replace('\n', ' '), shell=True)
 
 
@@ -1138,11 +1141,13 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
     :param kwargs: 
         :org_schema: SQL Server schema for origin table (defaults to dbo) 
         :dest_schema: PostgreSQL schema for destination table (defaults to public)
+        :print_cmd: Option to print he ogr2ogr command line statement (defaults to False) - used for debugging
     :return: 
     """
     spatial = kwargs.get('spatial', False)
     org_schema = kwargs.get('org_schema', 'dbo')
     dest_schema = kwargs.get('dest_schema', 'public')
+    print_cmd = kwargs.get('print_cmd', False)
     if spatial:
         # This flag isnt working, but data is being interpreted correctly
         # spatial = '-a_srs EPSG:2263 '
@@ -1171,5 +1176,6 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
         ms_schema=org_schema,
         spatial=spatial
     )
-
+    if print_cmd:
+        print cmd
     subprocess.call(cmd.replace('\n', ' '), shell=True)
