@@ -393,19 +393,33 @@ class DbConnect:
                          gdal_data_loc=gdal_data_loc)
 
     def shp_to_table(self, **kwargs):
+        """
+        Imports shape file to database. This uses GDAL to generate the table.
+        :param kwargs: 
+            :dbo: DbConnect object 
+            :path: File path of the shapefile
+            :table: Table name to use in the database
+            :schema: Schema to use in the database
+            :shp_name: = Shapefile name (ends in .shp) 
+            :cmd: Optional ogr2ogr command to overwrite default
+            :srid: SRID to use (defaults to 2263)
+            :gdal_data_loc: file path fo the GDAL data (defaults to C:\Program Files (x86)\GDAL\gdal-data)
+            :precision: Sets percision flag in ogr (defaults to -lco precision=NO)
+            :private: Flag for permissions in database (Defaults to false - will grant all to public)
+        :return: 
+        """
         dbo = kwargs.get('dbo', self)
         path = kwargs.get('path', None)
         table = kwargs.get('table', None)
         schema = kwargs.get('schema', 'public')
-        query = kwargs.get('query', None)
         shp_name = kwargs.get('shp_name', None)
         cmd = kwargs.get('cmd', None)
         srid = kwargs.get('srid', '2263')
         gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
         precision = kwargs.get('precision', False),
         private = kwargs.get('private', False)
-        shp = Shapefile(dbo=dbo, path=path, table=table, schema=schema, query=query,
-                        shp_name=shp_name, cmd=cmd, srid=srid, gdal_data_loc=gdal_data_loc)
+        shp = Shapefile(dbo=dbo, path=path, table=table, schema=schema, shp_name=shp_name,
+                        cmd=cmd, srid=srid, gdal_data_loc=gdal_data_loc)
         shp.read_shp(precision, private)
 
     def feature_class_to_table(self, **kwargs):
@@ -843,6 +857,8 @@ class Shapefile:
                 s=self.schema,
                 t=self.table))
 
+        self.rename_geom()
+
     def read_feature_class(self, private=False):
         if not all([self.path, self.shp_name]):
             return 'Missing path and/or shp_name'
@@ -883,6 +899,27 @@ class Shapefile:
             self.dbo.query('grant all on {s}."{t}" to public;'.format(
                 s=self.schema,
                 t=self.table))
+
+    def rename_geom(self):
+        self.dbo.query("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = '{s}'
+            AND table_name   = '{t}';
+        """.format(s=self.schema, t=self.table))
+        if 'wkb_geometry' in [i[0] for i in self.dbo.queries[-1].data]:
+            # rename column
+            self.dbo.query("""
+                ALTER TABLE {s}.{t} 
+                RENAME wkb_geometry to geom
+            """.format(s=self.schema, t=self.table))
+            # rename index
+            self.dbo.query("""
+                ALTER INDEX IF EXISTS
+                {s}.{t}_wkb_geometry_geom_idx
+                RENAME to {t}_geom_idx
+            """.format(s=self.schema, t=self.table))
+
 
 
 def file_loc(typ='file', print_message=None):
@@ -1179,3 +1216,4 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
     if print_cmd:
         print cmd
     subprocess.call(cmd.replace('\n', ' '), shell=True)
+
