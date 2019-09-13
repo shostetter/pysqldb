@@ -55,7 +55,7 @@ class DbConnect:
         """
         Connects to database
         Requires all connection parameters to be entered and connection type
-        :return: 
+        :return: None
         """
         # make sure all parameters are populated
         if not all((self.database, self.user, self.password, self.server)):
@@ -100,7 +100,7 @@ class DbConnect:
     def disconnect(self, quiet=False):
         """
         Closes connection to DB
-        :return: 
+        :return: None
         """
         self.conn.close()
         if not quiet:
@@ -113,6 +113,10 @@ class DbConnect:
             )
 
     def refresh_connection(self):
+        """
+        Disconnects and reconnects from database, to avoid open blocking connections
+        :return: None
+        """
         self.disconnect(True)
         self.connect(True)
 
@@ -136,7 +140,7 @@ class DbConnect:
 
     def query(self, query, **kwargs):
         """
-            runs Query object from input SQL string and adds query to queries
+            Runs Query object from input SQL string and adds query to queries
                 :param query: String sql query to be run  
                 :param kwargs: 
                     strict (bool): If true will run sys.exit on failed query attempts 
@@ -144,7 +148,8 @@ class DbConnect:
                     permission (bool): description 
                     temp (bool): if True any new tables will be logged for deletion at a future date 
                     remove_date (datetime.date): description
-                """
+            :return: None
+        """
         strict = kwargs.get('strict', True)
         permission = kwargs.get('permission', True)
         temp = kwargs.get('temp', True)
@@ -157,10 +162,11 @@ class DbConnect:
 
     def dfquery(self, query, timeme=False):
         """
-        Returns dataframe of results of a SQL query. Will though an error if no data is returned
+        Generates a pandas Dataframe for the results of select SQL query. 
+        This will throw an error if no data is returned. 
         :param query: SQL statement 
         :param timeme: default to False, adds timing to query run
-        :return: 
+        :return: Pandas DataFrame
         """
         qry = Query(self, query, timeme=timeme)
         self.queries.append(qry)
@@ -169,10 +175,13 @@ class DbConnect:
 
     def type_decoder(self, typ):
         """
-        Lazy type decoding from pandas to SQL.
-        This does not try to optimze for smallest size!
+        Lazy type decoding from pandas to SQL. There are problems assoicated with NaN values for numeric types when 
+        stored as Object dtypes. 
+        
+        This does not try to optimize for smallest size datatype.
+        
         :param typ: Numpy dtype for column   
-        :return: 
+        :return: String representing data type 
         """
         if typ == np.dtype('M'):
             return 'timestamp'
@@ -186,8 +195,8 @@ class DbConnect:
     def clean_cell(self, x):
         """
         Formats csv cells for SQL to add to database
-        :param x: 
-        :return: 
+        :param x: Raw csv cell value 
+        :return: Formatted csv cell value as python object
         """
         if pd.isnull(x):
             return None
@@ -223,7 +232,7 @@ class DbConnect:
         """
         Reformats column names to for database
         :param x: column name
-        :return: Reformated column name
+        :return: Reformatted column name with special characters replaced 
         """
         if type(x) == int:
             x = str(x)
@@ -238,12 +247,11 @@ class DbConnect:
         """
         Translates Pandas DataFrame to database table. 
         :param df: Pandas DataFrame to be added to database
-        :param table_name: Table name to be used in databse
+        :param table_name: Table name to be used in database
         :param kwargs: 
-            schema (str): Define schema, defaults to public (PG)/ dbo (MS)
-            overwrite (bool): If table exists in database will overwrite 
-
-        :return: 
+            :schema (str): Database schema to use for destination in database (defaults to public (PG)/ dbo (MS))
+            :overwrite (bool): If table exists in database will overwrite if True (defaults to False)
+        :return: None
         """
         overwrite = kwargs.get('overwrite', False)
         schema = kwargs.get('schema', 'public')
@@ -1164,8 +1172,9 @@ def pg_to_sql(pg, ms, org_table, **kwargs):
         spatial = ' '
     cmd = """
     ogr2ogr -overwrite -update -f MSSQLSpatial "MSSQL:server={ms_server};database={ms_db};UID={ms_user};PWD={ms_pass}" 
-    -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} user={pg_user} password={pg_pass}" 
-    {pg_schema}.{pg_table} -lco OVERWRITE=yes -lco SCHEMA={ms_schema} {spatial}-progress
+    PG:"host={pg_host} port={pg_port} dbname={pg_database} user={pg_user} password={pg_pass}" 
+    {pg_schema}.{pg_table} -lco OVERWRITE=yes -lco SCHEMA={ms_schema} {spatial}-progress 
+    --config MSSQLSPATIAL_USE_GEOMETRY_COLUMNS NO
     """.format(
         ms_pass=ms.password,
         ms_user=ms.user,
