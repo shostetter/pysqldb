@@ -423,6 +423,21 @@ class DbConnect:
         shp.read_shp(precision, private)
 
     def feature_class_to_table(self, **kwargs):
+        """
+        Imports shape file to database. This uses GDAL to generate the table.
+        :param kwargs: 
+            :dbo: DbConnect object 
+            :path: Filepath to the geodatabase 
+            :table: Table name to use in the database
+            :schema: Schema to use in the database
+            :shp_name: = FeatureClass name 
+            :cmd: Optional ogr2ogr command to overwrite default
+            :srid: SRID to use (defaults to 2263)
+            :gdal_data_loc: file path fo the GDAL data (defaults to C:\Program Files (x86)\GDAL\gdal-data)
+            :precision: Sets percision flag in ogr (defaults to -lco precision=NO)
+            :private: Flag for permissions in database (Defaults to false - will grant all to public)
+        :return: 
+        """
         dbo = kwargs.get('dbo', self)
         path = kwargs.get('path', None)
         table = kwargs.get('table', None)
@@ -899,6 +914,8 @@ class Shapefile:
             self.dbo.query('grant all on {s}."{t}" to public;'.format(
                 s=self.schema,
                 t=self.table))
+
+        self.rename_geom()
 
     def rename_geom(self):
         self.dbo.query("""
