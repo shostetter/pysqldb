@@ -12,19 +12,6 @@ import numpy as np
 from tqdm import tqdm
 import decimal
 
-#TODO: when tables are renamed indexes remain - causing failures with GDAL
-#TODO: option 1: check for indexes with relevant table name and drop them
-#TODO: option 2: add regex for renaming table and check for associated indecies and rename them then
-# SELECT
-#     tablename,
-#     indexname,
-#     indexdef
-# FROM
-#     pg_indexes
-# WHERE
-#     schemaname = 'working'
-# ORDER BY
-#         indexname;
 
 class DbConnect:
     def __init__(self, **kwargs):
@@ -40,7 +27,6 @@ class DbConnect:
         self.connection_start = None
         self.connect()
         self.clean_logs()
-        # TODO: add auto cleanup clean_up_from_log(db, schema, user)
 
     def __str__(self):
         return 'Database connection ({typ}) to {db} on {srv} - user: {usr} \nConnection established {dt}'.format(
@@ -177,9 +163,9 @@ class DbConnect:
         """
         Lazy type decoding from pandas to SQL. There are problems assoicated with NaN values for numeric types when 
         stored as Object dtypes. 
-        
+
         This does not try to optimize for smallest size datatype.
-        
+
         :param typ: Numpy dtype for column   
         :return: String representing data type 
         """
@@ -399,6 +385,11 @@ class DbConnect:
                          shp_name=shp_name,
                          cmd=cmd,
                          gdal_data_loc=gdal_data_loc)
+
+    def table_to_csv(self, table_name, **kwargs):
+
+        # TODO: Build this
+        pass
 
     def shp_to_table(self, **kwargs):
         """
@@ -703,13 +694,71 @@ class Query:
                                    table,
                                    self.dbo.user)
 
+    def chunked_write_csv(self, **kwargs):
+        """
+        Writes results of the query to a csv file. 
+        Performs the same operations as query_to_csv, but brakes data into chunks 
+        to deal with memory errors for large files. 
+        :param kwargs:
+            :output: String for csv output file location (defaults to current directory)
+            :open_file: Boolean flag to auto open output file
+            :quote_strings: Boolean flag for adding quote strings to output
+            :sep: Separator for csv (defaults to ',')
+        :return: None
+        """
+        print 'Large file...Writing %i rows of data...' % len(self.data)
+        output = kwargs.get('output',
+                            os.path.join(os.getcwd(), 'data_{}.csv'.format(
+                                datetime.datetime.now().strftime('%Y%m%d%H%M'))))
+        open_file = kwargs.get('open_file', False)
+        quote_strings = kwargs.get('quote_strings', False)
+        sep = kwargs.get('sep', ',')
+
+        # break data into chunks
+        def chunks(size=100000):
+            """
+            Breaks large datasets into smaller subsets
+            :param size: Integer for the size of the chunks (defaults to 100,000)
+            :return: Generator for data in 100,000 record chunks (list of lists)
+            """
+            n = len(self.data) / size
+            for i in range(0, n):
+                yield self.data[i::n], i
+
+        # write to csv
+        l = chunks()
+        for (chunk, pos) in l:
+            # convert to data frame
+            if self.dbo.type == 'MS':
+                self.data = [tuple(i) for i in self.data]
+                df = pd.DataFrame(chunk, columns=self.data_columns)
+            else:
+                df = pd.DataFrame(chunk, columns=self.data_columns)
+            # Only write header for 1st chunk
+            if pos == 0:
+                # Write out 1st chunk
+                if quote_strings:
+                    df.to_csv(output, index=False, quotechar="'", quoting=csv.QUOTE_NONNUMERIC, sep=sep)
+                else:
+                    df.to_csv(output, index=False, quotechar="'", sep=sep)
+            else:
+                if quote_strings:
+                    df.to_csv(output, index=False, quotechar="'", quoting=csv.QUOTE_NONNUMERIC, sep=sep,
+                              mode='a', header=False)
+                else:
+                    df.to_csv(output, index=False, quotechar="'", sep=sep, mode='a', header=False)
+        if open_file:
+            os.startfile(output)
+
     def query_to_csv(self, **kwargs):
         """
         Writes results of the query to a csv file
         :param kwargs:
-            output: String for csv output file location (defaults to current directory)
-            open_file: Boolean flag to auto open output file    
-        :return: 
+            :output: String for csv output file location (defaults to current directory)
+            :open_file: Boolean flag to auto open output file
+            :quote_strings: Boolean flag for adding quote strings to output
+            :sep: Separator for csv (defaults to ',')
+        :return: None
         """
         output = kwargs.get('output',
                             os.path.join(os.getcwd(), 'data_{}.csv'.format(
@@ -717,6 +766,9 @@ class Query:
         open_file = kwargs.get('open_file', False)
         quote_strings = kwargs.get('quote_strings', False)
         sep = kwargs.get('sep', ',')
+
+        if len(self.data) > 100000:
+            self.chunked_write_csv(**kwargs)
 
         df = self.dfquery()
         # TODO: convert geom to well known string for outputs
@@ -823,7 +875,7 @@ class Shapefile:
                 and t.relkind = 'r'
                 and t.relname = '{t}'
         """.format(
-                t=self.shp_name.replace('.shp', '').lower()))
+            t=self.shp_name.replace('.shp', '').lower()))
         idx = self.dbo.queries[-1].data
         for row in idx:
             if 'pkey' not in row[1]:
@@ -852,17 +904,17 @@ class Shapefile:
         cmd = 'ogr2ogr --config GDAL_DATA "{gdal_data}" -nlt PROMOTE_TO_MULTI -overwrite -a_srs ' \
               'EPSG:{srid} -progress -f "PostgreSQL" PG:"host={host} port=5432 dbname={dbname} ' \
               'user={user} password={password}" "{shp}" -nln {schema}.{tbl_name} {perc} '.format(
-                gdal_data=self.gdal_data_loc,
-                srid=self.srid,
-                host=self.dbo.server,
-                dbname=self.dbo.database,
-                user=self.dbo.user,
-                password=self.dbo.password,
-                shp=os.path.join(self.path, self.shp_name).lower(),
-                schema=self.schema,
-                tbl_name=self.table,
-                perc=precision
-                )
+            gdal_data=self.gdal_data_loc,
+            srid=self.srid,
+            host=self.dbo.server,
+            dbname=self.dbo.database,
+            user=self.dbo.user,
+            password=self.dbo.password,
+            shp=os.path.join(self.path, self.shp_name).lower(),
+            schema=self.schema,
+            tbl_name=self.table,
+            perc=precision
+        )
 
         subprocess.call(cmd, shell=True)
 
@@ -875,7 +927,6 @@ class Shapefile:
         ))
 
         if not private:
-
             self.dbo.query('grant all on {s}."{t}" to public;'.format(
                 s=self.schema,
                 t=self.table))
@@ -897,16 +948,16 @@ class Shapefile:
         cmd = 'ogr2ogr --config GDAL_DATA "{gdal_data}" -nlt PROMOTE_TO_MULTI -overwrite -a_srs ' \
               'EPSG:{srid} -f "PostgreSQL" PG:"host={host} user={user} dbname={dbname} ' \
               'password={password}" "{gdb}" "{feature}" -nln {sch}.{feature} -progress'.format(
-                gdal_data=self.gdal_data_loc,
-                srid=self.srid,
-                host=self.dbo.server,
-                dbname=self.dbo.database,
-                user=self.dbo.user,
-                password=self.dbo.password,
-                gdb=self.path,
-                feature=self.shp_name,
-                sch=self.schema
-                )
+            gdal_data=self.gdal_data_loc,
+            srid=self.srid,
+            host=self.dbo.server,
+            dbname=self.dbo.database,
+            user=self.dbo.user,
+            password=self.dbo.password,
+            gdb=self.path,
+            feature=self.shp_name,
+            sch=self.schema
+        )
         print cmd
         subprocess.call(cmd, shell=True)
 
@@ -944,7 +995,6 @@ class Shapefile:
                 {s}.{t}_wkb_geometry_geom_idx
                 RENAME to {t}_geom_idx
             """.format(s=self.schema, t=self.table))
-
 
 
 def file_loc(typ='file', print_message=None):
@@ -1098,56 +1148,7 @@ def clean_out_log(dbo, schema, table, owner):
         lt='__temp_log_table_{}__'.format(owner),
         ts=schema,
         tn=table
-        ), strict=False, timeme=False, no_comment=True)
-
-#
-# def pg_to_pg(pg, org_table, **kwargs):
-#     """
-#     Migrates tables from Postgres to SQL Server, generates spatial tables in MS if spatial in PG.
-#     :param pg: DbConnect instance connecting to PostgreSQL source database
-#     :param org_table: table name of table to migrate
-#     :param kwargs:
-#         :pg2: DbConnect instance connecting to PostgreSQL destination database if different from source
-#         :org_schema: PostgreSQL schema for origin table (defaults to public)
-#         :dest_schema: PostgreSQL schema for destination table (defaults to dbo)
-#     :return:
-#     """
-#     spatial = kwargs.get('spatial', False)
-#     pg2 = kwargs.get('pg2', pg)
-#     org_schema = kwargs.get('org_schema', 'public')
-#     dest_schema = kwargs.get('dest_schema', 'dbo')
-#     if spatial:
-#         spatial = '-a_srs EPSG:2263 '
-#     else:
-#         spatial = ' '
-#     cmd = """
-#     ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database}
-#     user={pg_user} password={pg_pass}"
-#     -f "PostgreSQL" PG:"host={pg_host2} port={pg_port2} dbname={pg_database2}
-#     user={pg_user2} password={pg_pass2}"
-#     {pg_schema}.{pg_table} -lco OVERWRITE=yes
-#     -lco SCHEMA={pg_schema2} {spatial}-progress
-#     """.format(
-#         pg_pass=pg.password,
-#         pg_user=pg.user,
-#         pg_host=pg.server,
-#         pg_port=pg.port,
-#         pg_database=pg.database,
-#         pg_schema=org_schema,
-#         pg_table=org_table,
-#
-#         pg_pass2=pg2.password,
-#         pg_user2=pg2.user,
-#         pg_host2=pg2.server,
-#         pg_port2=pg2.port,
-#         pg_database2=pg2.database,
-#         pg_schema2=dest_schema,
-#
-#         spatial=spatial
-#     )
-#     print cmd
-#
-#     subprocess.call(cmd.replace('\n', ' '), shell=True)
+    ), strict=False, timeme=False, no_comment=True)
 
 
 def pg_to_sql(pg, ms, org_table, **kwargs):
