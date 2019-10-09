@@ -27,6 +27,7 @@ class DbConnect:
         self.connection_start = None
         self.connect()
         self.clean_logs()
+        self.data = None
 
     def __str__(self):
         return 'Database connection ({typ}) to {db} on {srv} - user: {usr} \nConnection established {dt}'.format(
@@ -145,6 +146,7 @@ class DbConnect:
                     timeme=timeme, no_comment=no_comment)
         self.queries.append(qry)
         self.refresh_connection()
+        self.data = qry.data
 
     def dfquery(self, query, timeme=False):
         """
@@ -157,6 +159,7 @@ class DbConnect:
         qry = Query(self, query, timeme=timeme)
         self.queries.append(qry)
         self.refresh_connection()
+        self.data = qry.data
         return qry.dfquery()
 
     def type_decoder(self, typ):
@@ -208,7 +211,8 @@ class DbConnect:
             return x.strftime('%Y-%m-%d %H:%M')
         elif type(x) == datetime.datetime:
             return x.strftime('%Y-%m-%d %H:%M')
-        elif type(x) == pd.tslib.Timestamp:
+        # elif type(x) == pd.tslib.Timestamp: # depricated
+        elif type(x) == pd.Timestamp:
             x.to_pydatetime()
             return x.strftime('%Y-%m-%d %H:%M')
         else:
@@ -381,7 +385,7 @@ class DbConnect:
         gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
         qry = Query(self, query, strict=strict)
         qry.query_to_shp(path=path,
-                         query=query,
+                         # query=query,
                          shp_name=shp_name,
                          cmd=cmd,
                          gdal_data_loc=gdal_data_loc)
@@ -497,6 +501,90 @@ class DbConnect:
                     x = self.queries[-1].data[0][0]
                     if x:
                         clean_up_from_log(self, schema, self.user)
+
+    def blocking_me(self):
+        """
+        Runs dfquery to find which queries or users are blocking the user defined in the connection. Postgres Only.
+        :return: Pandas DataFrame of blocking queries
+        """
+        if self.type == 'PG':
+            return self.dfquery("""
+            SELECT blocked_locks.pid     AS blocked_pid,
+                 blocked_activity.usename  AS blocked_user,
+                 blocking_locks.pid     AS blocking_pid,
+                 blocking_activity.usename AS blocking_user,
+                 blocked_activity.query    AS blocked_statement,
+                 blocking_activity.query   AS current_statement_in_blocking_process
+           FROM  pg_catalog.pg_locks         blocked_locks
+            JOIN pg_catalog.pg_stat_activity blocked_activity  ON blocked_activity.pid = blocked_locks.pid
+            JOIN pg_catalog.pg_locks         blocking_locks 
+                ON blocking_locks.locktype = blocked_locks.locktype
+                AND blocking_locks.DATABASE IS NOT DISTINCT FROM blocked_locks.DATABASE
+                AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
+                AND blocking_locks.page IS NOT DISTINCT FROM blocked_locks.page
+                AND blocking_locks.tuple IS NOT DISTINCT FROM blocked_locks.tuple
+                AND blocking_locks.virtualxid IS NOT DISTINCT FROM blocked_locks.virtualxid
+                AND blocking_locks.transactionid IS NOT DISTINCT FROM blocked_locks.transactionid
+                AND blocking_locks.classid IS NOT DISTINCT FROM blocked_locks.classid
+                AND blocking_locks.objid IS NOT DISTINCT FROM blocked_locks.objid
+                AND blocking_locks.objsubid IS NOT DISTINCT FROM blocked_locks.objsubid
+                AND blocking_locks.pid != blocked_locks.pid
+            JOIN pg_catalog.pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid
+           WHERE NOT blocked_locks.GRANTED
+           AND blocked_activity.usename = '%s'
+           ORDER BY blocking_activity.usename;
+        """ % self.user)
+
+    def kill_blocks(self):
+        """
+        Will kill any queries that are blocking, that the user (defined in the connection) owns. Postgres Only.
+        :return: None
+        """
+        if self.type == 'PG':
+            self.query("""
+            SELECT blocking_locks.pid AS blocking_pid
+               FROM  pg_catalog.pg_locks         blocked_locks
+                JOIN pg_catalog.pg_stat_activity blocked_activity  ON blocked_activity.pid = blocked_locks.pid
+                JOIN pg_catalog.pg_locks         blocking_locks 
+                    ON blocking_locks.locktype = blocked_locks.locktype
+                    AND blocking_locks.DATABASE IS NOT DISTINCT FROM blocked_locks.DATABASE
+                    AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
+                    AND blocking_locks.page IS NOT DISTINCT FROM blocked_locks.page
+                    AND blocking_locks.tuple IS NOT DISTINCT FROM blocked_locks.tuple
+                    AND blocking_locks.virtualxid IS NOT DISTINCT FROM blocked_locks.virtualxid
+                    AND blocking_locks.transactionid IS NOT DISTINCT FROM blocked_locks.transactionid
+                    AND blocking_locks.classid IS NOT DISTINCT FROM blocked_locks.classid
+                    AND blocking_locks.objid IS NOT DISTINCT FROM blocked_locks.objid
+                    AND blocking_locks.objsubid IS NOT DISTINCT FROM blocked_locks.objsubid
+                    AND blocking_locks.pid != blocked_locks.pid
+                JOIN pg_catalog.pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid
+               WHERE NOT blocked_locks.GRANTED
+               and blocking_activity.usename = '%s'
+            """ % self.user)
+            to_kill = [i[0] for i in self.queries[-1].data]
+            if to_kill:
+                print 'Killing %i connections' % len(to_kill)
+                for pid in tqdm(to_kill):
+                    self.query("""SELECT pg_terminate_backend(%i);""" % pid)
+
+    def my_tables(self, schema='public'):
+        """
+        Get a list of tables for which you are the owner (PG only).
+        :param schema: Schema to look in (defaults to public)
+        :return: Pandas DataFRame of the table list
+        """
+        if self.type == 'PG':
+            return self.dfquery("""
+                SELECT
+                    tablename, tableowner
+                FROM
+                    pg_catalog.pg_tables
+                WHERE
+                    schemaname ='{s}'
+                    AND tableowner='{u}'
+                ORDER BY 
+                    tablename
+            """.format(s=schema, u=self.user))
 
 
 class Query:
@@ -731,7 +819,7 @@ class Query:
             # convert to data frame
             if self.dbo.type == 'MS':
                 self.data = [tuple(i) for i in self.data]
-                df = pd.DataFrame(chunk, columns=self.data_columns)
+                df = pd.DataFrame(self.data, columns=self.data_columns)
             else:
                 df = pd.DataFrame(chunk, columns=self.data_columns)
             # Only write header for 1st chunk
@@ -841,7 +929,7 @@ class Shapefile:
                                                                             db=self.dbo.database,
                                                                             password='*' * len(self.dbo.password),
                                                                             pg_sql_select=qry)
-        os.system(self.cmd.replace('{}'.format('*' * len(self.dbo.password)), self.dbo.password))
+        os.system(self.cmd.replace('{}'.format('*' * len(self.dbo.password)), self.dbo.password).replace('\n', ' '))
         if self.table:
             print '{t} shapefile \nwritten to: {p}\ngenerated from: {q}'.format(t=self.name_extension(self.shp_name),
                                                                                 p=self.path,
@@ -1194,6 +1282,43 @@ def pg_to_sql(pg, ms, org_table, **kwargs):
     if print_cmd:
         print cmd
     subprocess.call(cmd.replace('\n', ' '), shell=True)
+
+
+def sql_to_pg_qry(ms, pg, query, **kwargs):
+    spatial = kwargs.get('spatial', False)
+    dest_schema = kwargs.get('dest_schema', 'public')
+    print_cmd = kwargs.get('print_cmd', False)
+    if spatial:
+        # This flag isnt working, but data is being interpreted correctly
+        # spatial = '-a_srs EPSG:2263 '
+        spatial = ' '
+    else:
+        spatial = ' '
+    cmd = """
+        ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
+        user={pg_user} password={pg_pass} SCHEMA={pg_schema}" -f MSSQLSpatial "MSSQL:server={ms_server};database={ms_database};
+        UID={ms_user};PWD={ms_pass}" -sql "{sql_select}" -lco OVERWRITE=yes 
+        -lco SCHEMA={pg_schema} {spatial}-progress
+        """.format(
+        ms_pass=ms.password,
+        ms_user=ms.user,
+        pg_pass=pg.password,
+        pg_user=pg.user,
+        ms_server=ms.server,
+        ms_db=ms.database,
+        pg_host=pg.server,
+        pg_port=pg.port,
+        ms_database=ms.database,
+        pg_database=pg.database,
+        pg_schema=dest_schema,
+        sql_select=query,
+        spatial=spatial
+    )
+    if print_cmd:
+        print cmd
+    subprocess.call(cmd.replace('\n', ' '), shell=True)
+
+
 
 
 def sql_to_pg(ms, pg, org_table, **kwargs):
