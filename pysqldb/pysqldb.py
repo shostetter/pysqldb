@@ -233,15 +233,15 @@ class DbConnect:
         e = d.replace(':', '_')
         return e
 
-    def dataframe_to_table(self, df, table_name, **kwargs):
+    def dataframe_to_table_schema(self, df, table_name, **kwargs):
         """
-        Translates Pandas DataFrame to database table. 
+        Translates Pandas DataFrame intto empty database table. 
         :param df: Pandas DataFrame to be added to database
         :param table_name: Table name to be used in database
         :param kwargs: 
             :schema (str): Database schema to use for destination in database (defaults to public (PG)/ dbo (MS))
             :overwrite (bool): If table exists in database will overwrite if True (defaults to False)
-        :return: None
+        :return: Table schema that was created from DataFrame
         """
         overwrite = kwargs.get('overwrite', False)
         schema = kwargs.get('schema', 'public')
@@ -261,17 +261,31 @@ class DbConnect:
         # create table in database
         if overwrite:
             qry = """
-            DROP TABLE {if_typ}{s}.{t}
-        """.format(s=schema, t=table_name, if_typ=it)
+                    DROP TABLE {if_typ}{s}.{t}
+                """.format(s=schema, t=table_name, if_typ=it)
             self.query(qry.replace('\n', ' '), strict=False, timeme=False)  # Fail if table not exists MS
         qry = """
-            CREATE TABLE {s}.{t} (
-            {cols}
-            )
-        """.format(s=schema, t=table_name, cols=str(['"' + str(i[0]) + '" ' + i[1] for i in input_schema]
-                                                    )[1:-1].replace("'", ""))
+                    CREATE TABLE {s}.{t} (
+                    {cols}
+                    )
+                """.format(s=schema, t=table_name, cols=str(['"' + str(i[0]) + '" ' + i[1] for i in input_schema]
+                                                            )[1:-1].replace("'", ""))
         self.query(qry.replace('\n', ' '), timeme=False, temp=temp)
+        return input_schema
 
+    def dataframe_to_table(self, df, table_name, input_schema, **kwargs):
+        """
+        Adds data from Pandas DataFrame to existing table
+        :param df: Pandas DataFrame to be added to database
+        :param table_name: Table name to be used in database
+        :param kwargs: 
+            :schema (str): Database schema to use for destination in database (defaults to public (PG)/ dbo (MS))
+            :overwrite (bool): If table exists in database will overwrite if True (defaults to False)
+        :return: None
+        """
+        schema = kwargs.get('schema', 'public')
+        if self.type == 'MS':
+            schema = kwargs.get('schema', 'dbo')
         # insert data
         print 'Reading data into Database\n'
         for _, row in tqdm(df.iterrows()):
@@ -295,6 +309,7 @@ class DbConnect:
             overwrite (bool): If table exists in database will overwrite 
             schema (str): Define schema, defaults to public (PG)/ dbo (MS)
             table_name: (str): name for database table
+            sep (str): Separator for csv file, defaults to comma (,)
         :return: 
         """
         input_file = kwargs.get('input_file', None)
@@ -303,16 +318,91 @@ class DbConnect:
         table_name = kwargs.get('table_name', '_{u}_{d}'.format(
             u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
         temp = kwargs.get('temp', True)
+        sep = kwargs.get('sep', ',')
         if self.type == 'MS':
             schema = kwargs.get('schema', 'dbo')
         if not input_file:
             input_file = file_loc('file')
         # use pandas to get existing data and schema
 
-        df = pd.read_csv(input_file)
+        df = pd.read_csv(input_file, sep=sep)
         if not table_name:
             table_name = os.path.basename(input_file).split('.')[0]
-        self.dataframe_to_table(df, table_name, overwrite=overwrite, schema=schema, temp=temp)
+        input_schema = self.dataframe_to_table_schema(df, table_name, overwrite=overwrite, schema=schema, temp=temp)
+        # for larger files use GDAL to import
+        if df.shape[0] > 999:
+            # try to bulk load on failure should revert to insert method
+            if not self.bulk_csv_to_table(input_schema=input_schema, **kwargs):
+                self.dataframe_to_table(df, table_name, input_schema, overwrite=overwrite, schema=schema, temp=temp)
+        else:
+            self.dataframe_to_table(df, table_name, input_schema, overwrite=overwrite, schema=schema, temp=temp)
+
+    def bulk_csv_to_table(self, **kwargs):
+        print 'Bulk loading data...'
+        input_file = kwargs.get('input_file', None)
+
+        if self.type == 'MS':
+            schema = kwargs.get('schema', 'dbo')
+        else:
+            schema = kwargs.get('schema', 'public')
+        table_name = kwargs.get('table_name', '_{u}_{d}'.format(
+            u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
+        sep = kwargs.get('sep', ',')
+        input_schema = kwargs.get('input_schema', None)
+        types = {'PG': 'PostgreSQL', 'MS': 'MSSQLSpatial'}
+        # Build staging table using GDAL to import data
+        # This is needed because GDAL doesnt parse datatypes (all to varchar)
+        if self.type == 'PG':
+            cmd = """ogr2ogr -f "{t}" 
+            PG:"host={server} 
+            user={user} 
+            dbname={db} 
+            password={password}" 
+            {f} 
+            -nln "{schema}.stg_{tbl}" 
+            """.format(t=types[self.type],
+                       server=self.server,
+                       user=self.user,
+                       password=self.password,
+                       db=self.database,
+                       f=input_file,
+                       schema=schema,
+                       tbl=table_name
+                       )
+        else:
+            cmd = """ogr2ogr -f "{t}" "MSSQL:server={server}; 
+                     UID={user}; database={db}; PWD={password}" 
+                     -nln "{schema}.stg_{tbl}" 
+                     {f} 
+                     --config MSSQLSPATIAL_USE_GEOMETRY_COLUMNS NO
+                     """.format(t=types[self.type],
+                                server=self.server,
+                                user=self.user,
+                                password=self.password,
+                                db=self.database,
+                                f=input_file,
+                                schema=schema,
+                                tbl=table_name
+                                )
+        # print cmd.replace('\n', ' ')
+        subprocess.call(cmd.replace('\n', ' '), shell=True)
+        # move data to final table
+        self.query("ALTER TABLE {s}.stg_{t} DROP ogc_fid".format(s=schema, t=table_name), strict=False)
+        qry = '''INSERT INTO {s}.{t}
+                SELECT
+                {cols}
+                FROM {s}.stg_{t}
+            '''.format(
+            s=schema,
+            t=table_name,
+            cols=str(['CAST(' + i[0] + ' as ' + i[1] + ')' for i in input_schema]).replace("'", "")[1:-1]
+            #str([i[0] + '::' + i[1] for i in input_schema]).replace("'", "")[1:-1]
+        )
+        self.query(qry)
+        self.query("DROP TABLE {s}.stg_{t}".format(s=schema, t=table_name))
+        df = self.dfquery("SELECT COUNT(*) as cnt FROM {s}.{t}".format(s=schema, t=table_name), timeme=False)
+        print '\n{c} rows added to {s}.{t}\n'.format(c=df.cnt.values[0], s=schema, t=table_name)
+        return True
 
     def xls_to_table(self, **kwargs):
         """
