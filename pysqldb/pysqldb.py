@@ -326,6 +326,8 @@ class DbConnect:
         # use pandas to get existing data and schema
 
         df = pd.read_csv(input_file, sep=sep)
+        if 'ogc_fid' in df.columns:
+            df = df.drop('ogc_fid', 1)
         if not table_name:
             table_name = os.path.basename(input_file).split('.')[0]
         input_schema = self.dataframe_to_table_schema(df, table_name, overwrite=overwrite, schema=schema, temp=temp)
@@ -359,6 +361,7 @@ class DbConnect:
             dbname={db} 
             password={password}" 
             {f} 
+            -oo EMPTY_STRING_AS_NULL=YES
             -nln "{schema}.stg_{tbl}" 
             """.format(t=types[self.type],
                        server=self.server,
@@ -374,6 +377,7 @@ class DbConnect:
                      UID={user}; database={db}; PWD={password}" 
                      -nln "{schema}.stg_{tbl}" 
                      {f} 
+                     -oo EMPTY_STRING_AS_NULL=YES
                      --config MSSQLSPATIAL_USE_GEOMETRY_COLUMNS NO
                      """.format(t=types[self.type],
                                 server=self.server,
@@ -387,7 +391,7 @@ class DbConnect:
         # print cmd.replace('\n', ' ')
         subprocess.call(cmd.replace('\n', ' '), shell=True)
         # move data to final table
-        self.query("ALTER TABLE {s}.stg_{t} DROP ogc_fid".format(s=schema, t=table_name), strict=False)
+        self.query("ALTER TABLE {s}.stg_{t} DROP COLUMN IF EXISTS ogc_fid".format(s=schema, t=table_name), strict=False)
         qry = '''INSERT INTO {s}.{t}
                 SELECT
                 {cols}
@@ -395,8 +399,9 @@ class DbConnect:
             '''.format(
             s=schema,
             t=table_name,
-            cols=str(['CAST(' + i[0] + ' as ' + i[1] + ')' for i in input_schema]).replace("'", "")[1:-1]
-            #str([i[0] + '::' + i[1] for i in input_schema]).replace("'", "")[1:-1]
+            # cast all fields to new type to move from stg to final table
+            cols=str(['CAST(' + i[0] + ' as ' + i[1] + ')' for i in input_schema if i[0] != 'ogc_fid']).replace(
+                "'", "")[1:-1]
         )
         self.query(qry)
         self.query("DROP TABLE {s}.stg_{t}".format(s=schema, t=table_name))
