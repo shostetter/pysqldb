@@ -1383,6 +1383,9 @@ def sql_to_pg_qry(ms, pg, query, **kwargs):
     spatial = kwargs.get('spatial', False)
     dest_schema = kwargs.get('dest_schema', 'public')
     print_cmd = kwargs.get('print_cmd', False)
+    table_name = kwargs.get('table_name', '_{u}_{d}'.format(
+        u=pg.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
+
     if spatial:
         # This flag isnt working, but data is being interpreted correctly
         # spatial = '-a_srs EPSG:2263 '
@@ -1391,9 +1394,9 @@ def sql_to_pg_qry(ms, pg, query, **kwargs):
         spatial = ' '
     cmd = """
         ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
-        user={pg_user} password={pg_pass} SCHEMA={pg_schema}" -f MSSQLSpatial "MSSQL:server={ms_server};database={ms_database};
+        user={pg_user} password={pg_pass}" -f MSSQLSpatial  "MSSQL:server={ms_server};database={ms_database};
         UID={ms_user};PWD={ms_pass}" -sql "{sql_select}" -lco OVERWRITE=yes 
-        -lco SCHEMA={pg_schema} {spatial}-progress
+        -lco SCHEMA={pg_schema} -nln {table_name} {spatial}-progress
         """.format(
         ms_pass=ms.password,
         ms_user=ms.user,
@@ -1407,13 +1410,12 @@ def sql_to_pg_qry(ms, pg, query, **kwargs):
         pg_database=pg.database,
         pg_schema=dest_schema,
         sql_select=query,
-        spatial=spatial
+        spatial=spatial,
+        table_name=table_name
     )
     if print_cmd:
         print cmd
     subprocess.call(cmd.replace('\n', ' '), shell=True)
-
-
 
 
 def sql_to_pg(ms, pg, org_table, **kwargs):
