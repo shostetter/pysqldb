@@ -1466,3 +1466,33 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
         print cmd
     subprocess.call(cmd.replace('\n', ' '), shell=True)
 
+
+def pg_to_pg(from_pg, to_pg, org_table, **kwargs):
+    org_schema = kwargs.get('org_schema', 'dbo')
+    dest_schema = kwargs.get('dest_schema', 'public')
+    print_cmd = kwargs.get('print_cmd', False)
+    dest_name = kwargs.get('dest_name', org_table)
+    cmd = """
+    ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={to_pg_host} port={to_pg_port} dbname={to_pg_database} 
+    user={to_pg_user} password={to_pg_pass}" -f "PostgreSQL" PG:"host={from_pg_host} port={from_pg_port} 
+    dbname={from_pg_database}  user={from_pg_user} password={from_pg_pass}" {from_pg_schema}.{from_pg_table} 
+    -lco OVERWRITE=yes -lco SCHEMA={to_pg_schema} -nln {to_pg_name} -progress
+    """.format(
+        from_pg_host=from_pg.server,
+        from_pg_port=from_pg.port,
+        from_pg_database=from_pg.database,
+        from_pg_user=from_pg.user,
+        from_pg_pass=from_pg.password,
+        to_pg_host=to_pg.server,
+        to_pg_port=to_pg.port,
+        to_pg_database=to_pg.database,
+        to_pg_user=to_pg.user,
+        to_pg_pass=to_pg.password,
+        from_pg_schema=org_schema,
+        to_pg_schema=dest_schema,
+        from_pg_table=org_table,
+        to_pg_name=dest_name
+    )
+    if print_cmd:
+        print cmd
+    subprocess.call(cmd.replace('\n', ' '), shell=True)
