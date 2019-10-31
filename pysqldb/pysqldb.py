@@ -392,6 +392,13 @@ class DbConnect:
         subprocess.call(cmd.replace('\n', ' '), shell=True)
         # move data to final table
         self.query("ALTER TABLE {s}.stg_{t} DROP COLUMN IF EXISTS ogc_fid".format(s=schema, t=table_name), strict=False)
+        # need to get staging field names, GDAL sanitizes differently
+        if self.type == 'SQL':
+            sq, p = 'TOP 1', ''
+        else:
+            sq, p = '', 'LIMIT 1'
+        qry = Query(self, "select {sq} * from {s}.stg_{t} {p}".format(s=schema, t=table_name, sq=sq, p=p),
+                    strict=False, timeme=False)
         qry = '''INSERT INTO {s}.{t}
                 SELECT
                 {cols}
@@ -400,7 +407,9 @@ class DbConnect:
             s=schema,
             t=table_name,
             # cast all fields to new type to move from stg to final table
-            cols=str(['CAST(' + i[0] + ' as ' + i[1] + ')' for i in input_schema if i[0] != 'ogc_fid']).replace(
+            # take staging field name from stg table
+            cols=str(['CAST("' + qry.data_columns[i[0]] + '" as ' + i[1][1] + ')' for i in enumerate(input_schema)
+                      if i[1][0] != 'ogc_fid']).replace(
                 "'", "")[1:-1]
         )
         self.query(qry)
@@ -1430,21 +1439,19 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
         :print_cmd: Option to print he ogr2ogr command line statement (defaults to False) - used for debugging
     :return: 
     """
-    spatial = kwargs.get('spatial', False)
+    spatial = kwargs.get('spatial', True)
     org_schema = kwargs.get('org_schema', 'dbo')
     dest_schema = kwargs.get('dest_schema', 'public')
     print_cmd = kwargs.get('print_cmd', False)
     if spatial:
-        # This flag isnt working, but data is being interpreted correctly
-        # spatial = '-a_srs EPSG:2263 '
-        spatial = ' '
+        spatial = 'MSSQLSpatial'
     else:
-        spatial = ' '
+        spatial = 'MSSQL'
     cmd = """
     ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
-    user={pg_user} password={pg_pass}" -f MSSQLSpatial "MSSQL:server={ms_server};database={ms_database};
+    user={pg_user} password={pg_pass}" -f {spatial} "MSSQL:server={ms_server};database={ms_database};
     UID={ms_user};PWD={ms_pass}" {ms_schema}.{ms_table} -lco OVERWRITE=yes 
-    -lco SCHEMA={pg_schema} {spatial}-progress
+    -lco SCHEMA={pg_schema} -progress
     """.format(
         ms_pass=ms.password,
         ms_user=ms.user,
