@@ -142,8 +142,9 @@ class DbConnect:
         temp = kwargs.get('temp', True)
         timeme = kwargs.get('timeme', True)
         no_comment = kwargs.get('no_comment', False)
+        comment = kwargs.get('comment', '')
         qry = Query(self, query, strict=strict, permission=permission, temp=temp,
-                    timeme=timeme, no_comment=no_comment)
+                    timeme=timeme, no_comment=no_comment, comment=comment)
         self.queries.append(qry)
         self.refresh_connection()
         self.data = qry.data
@@ -391,13 +392,15 @@ class DbConnect:
         # print cmd.replace('\n', ' ')
         subprocess.call(cmd.replace('\n', ' '), shell=True)
         # move data to final table
-        self.query("ALTER TABLE {s}.stg_{t} DROP COLUMN IF EXISTS ogc_fid".format(s=schema, t=table_name), strict=False)
+        self.query("ALTER TABLE {s}.stg_{t} DROP COLUMN IF EXISTS ogc_fid".format(
+            s=schema, t=table_name), strict=False, timeme=False)
         # need to get staging field names, GDAL sanitizes differently
         if self.type == 'SQL':
             sq, p = 'TOP 1', ''
         else:
             sq, p = '', 'LIMIT 1'
-        qry = Query(self, "select {sq} * from {s}.stg_{t} {p}".format(s=schema, t=table_name, sq=sq, p=p),
+        qry = Query(self, "select {sq} * from {s}.stg_{t} {p}".format(
+            s=schema, t=table_name, sq=sq, p=p),
                     strict=False, timeme=False)
         qry = '''INSERT INTO {s}.{t}
                 SELECT
@@ -412,8 +415,8 @@ class DbConnect:
                       if i[1][0] != 'ogc_fid']).replace(
                 "'", "")[1:-1]
         )
-        self.query(qry)
-        self.query("DROP TABLE {s}.stg_{t}".format(s=schema, t=table_name))
+        self.query(qry, timeme=False)
+        self.query("DROP TABLE {s}.stg_{t}".format(s=schema, t=table_name), timeme=False)
         df = self.dfquery("SELECT COUNT(*) as cnt FROM {s}.{t}".format(s=schema, t=table_name), timeme=False)
         print '\n{c} rows added to {s}.{t}\n'.format(c=df.cnt.values[0], s=schema, t=table_name)
         return True
@@ -468,6 +471,7 @@ class DbConnect:
         sep = kwargs.get('sep', ',')
         quote_strings = kwargs.get('quote_strings', False)
         qry = Query(self, query, strict=strict)
+        print 'Writing to %s' % output
         qry.query_to_csv(output=output, open_file=open_file, quote_strings=quote_strings, sep=sep)
 
     def query_to_shp(self, query, **kwargs):
@@ -512,7 +516,7 @@ class DbConnect:
             :srid: SRID to use (defaults to 2263)
             :gdal_data_loc: file path fo the GDAL data (defaults to C:\Program Files (x86)\GDAL\gdal-data)
             :precision: Sets percision flag in ogr (defaults to -lco precision=NO)
-            :private: Flag for permissions in database (Defaults to false - will grant all to public)
+            :private: Flag for permissions in database (Defaults to false - will grant select to public)
         :return: 
         """
         dbo = kwargs.get('dbo', self)
@@ -542,7 +546,7 @@ class DbConnect:
             :srid: SRID to use (defaults to 2263)
             :gdal_data_loc: file path fo the GDAL data (defaults to C:\Program Files (x86)\GDAL\gdal-data)
             :precision: Sets percision flag in ogr (defaults to -lco precision=NO)
-            :private: Flag for permissions in database (Defaults to false - will grant all to public)
+            :private: Flag for permissions in database (Defaults to false - will grant select to public)
         :return: 
         """
         dbo = kwargs.get('dbo', self)
@@ -789,7 +793,7 @@ class Query:
             self.new_tables = self.query_creates_table()
             if self.permission:
                 for t in self.new_tables:
-                    self.dbo.query('grant all on {t} to public;'.format(t=t), timeme=False)
+                    self.dbo.query('grant select on {t} to public;'.format(t=t), timeme=False)
         else:
             self.query_data(cur)
 
@@ -1119,7 +1123,7 @@ class Shapefile:
         ))
 
         if not private:
-            self.dbo.query('grant all on {s}."{t}" to public;'.format(
+            self.dbo.query('grant select on {s}."{t}" to public;'.format(
                 s=self.schema,
                 t=self.table))
 
@@ -1162,7 +1166,7 @@ class Shapefile:
         ))
 
         if not private:
-            self.dbo.query('grant all on {s}."{t}" to public;'.format(
+            self.dbo.query('grant select on {s}."{t}" to public;'.format(
                 s=self.schema,
                 t=self.table))
 
@@ -1389,23 +1393,21 @@ def pg_to_sql(pg, ms, org_table, **kwargs):
 
 
 def sql_to_pg_qry(ms, pg, query, **kwargs):
-    spatial = kwargs.get('spatial', False)
+    spatial = kwargs.get('spatial', True)
     dest_schema = kwargs.get('dest_schema', 'public')
     print_cmd = kwargs.get('print_cmd', False)
     table_name = kwargs.get('table_name', '_{u}_{d}'.format(
         u=pg.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
 
     if spatial:
-        # This flag isnt working, but data is being interpreted correctly
-        # spatial = '-a_srs EPSG:2263 '
-        spatial = ' '
+        spatial = 'MSSQLSpatial'
     else:
-        spatial = ' '
+        spatial = 'MSSQL'
     cmd = """
         ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
-        user={pg_user} password={pg_pass}" -f MSSQLSpatial  "MSSQL:server={ms_server};database={ms_database};
+        user={pg_user} password={pg_pass}" -f {spatial} "MSSQL:server={ms_server};database={ms_database};
         UID={ms_user};PWD={ms_pass}" -sql "{sql_select}" -lco OVERWRITE=yes 
-        -lco SCHEMA={pg_schema} -nln {table_name} {spatial}-progress
+        -lco SCHEMA={pg_schema} -nln {table_name} -progress
         """.format(
         ms_pass=ms.password,
         ms_user=ms.user,
@@ -1475,7 +1477,7 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
 
 
 def pg_to_pg(from_pg, to_pg, org_table, **kwargs):
-    org_schema = kwargs.get('org_schema', 'dbo')
+    org_schema = kwargs.get('org_schema', 'public')
     dest_schema = kwargs.get('dest_schema', 'public')
     print_cmd = kwargs.get('print_cmd', False)
     dest_name = kwargs.get('dest_name', org_table)
