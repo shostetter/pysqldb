@@ -28,6 +28,7 @@ class DbConnect:
         self.connect()
         self.clean_logs()
         self.data = None
+        # self.pid = self.get_pid()
 
     def __str__(self):
         return 'Database connection ({typ}) to {db} on {srv} - user: {usr} \nConnection established {dt}'.format(
@@ -59,6 +60,7 @@ class DbConnect:
                 'port': self.port
             }
             self.conn = psycopg2.connect(**self.params)
+            # self.pid = self.get_pid()
 
         if self.type.upper() in ('MS', 'SQL', 'MSSQL', 'SQLSERVER'):
             # standardize types
@@ -83,6 +85,18 @@ class DbConnect:
         self.connection_start = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         if not quiet:
             print (self)
+
+    def get_pid(self):
+        if self.type == 'PG':
+            cur = self.conn.cursor()
+            try:
+                cur.execute("SELECT pg_backend_pid()")
+                return [i[0] for i in cur].pop()
+            except:
+                print ('Failure:\nOn get_pid()')
+                return None
+        else:
+            return None
 
     def disconnect(self, quiet=False):
         """
@@ -242,6 +256,7 @@ class DbConnect:
         :param kwargs: 
             :schema (str): Database schema to use for destination in database (defaults to public (PG)/ dbo (MS))
             :overwrite (bool): If table exists in database will overwrite if True (defaults to False)
+            :temp (bool): Optional flag to make table as not-temporary (defaults to False)
         :return: Table schema that was created from DataFrame
         """
         overwrite = kwargs.get('overwrite', False)
@@ -274,17 +289,24 @@ class DbConnect:
         self.query(qry.replace('\n', ' '), timeme=False, temp=temp)
         return input_schema
 
-    def dataframe_to_table(self, df, table_name, input_schema, **kwargs):
+    def dataframe_to_table(self, df, table_name, **kwargs):
         """
         Adds data from Pandas DataFrame to existing table
         :param df: Pandas DataFrame to be added to database
         :param table_name: Table name to be used in database
         :param kwargs: 
+            :table_schema: schema of dataframe (returned from dataframe_to_table_schema)
             :schema (str): Database schema to use for destination in database (defaults to public (PG)/ dbo (MS))
             :overwrite (bool): If table exists in database will overwrite if True (defaults to False)
+            :temp (bool): Optional flag to make table as not-temporary (defaults to False)
         :return: None
         """
+        overwrite = kwargs.get('overwrite', False)
+        temp = kwargs.get('temp', True)
+        table_schema = kwargs.get('table_schema', None)
         schema = kwargs.get('schema', 'public')
+        if not table_schema:
+            table_schema = self.dataframe_to_table_schema(df, table_name, overwrite=overwrite, schema=schema, temp=temp)
         if self.type == 'MS':
             schema = kwargs.get('schema', 'dbo')
         # insert data
@@ -295,7 +317,7 @@ class DbConnect:
                 INSERT INTO {s}.{t} ({cols})
                 VALUES ({d})
             """.format(s=schema, t=table_name,
-                       cols=str(['"' + str(i[0]) + '"' for i in input_schema])[1:-1].replace("'", ''),
+                       cols=str(['"' + str(i[0]) + '"' for i in table_schema])[1:-1].replace("'", ''),
                        d=str([self.clean_cell(i) for i in row.values])[1:-1].replace(
                            'None', 'NULL')), strict=False, timeme=False)
 
@@ -336,9 +358,9 @@ class DbConnect:
         if df.shape[0] > 999:
             # try to bulk load on failure should revert to insert method
             if not self.bulk_csv_to_table(input_schema=input_schema, **kwargs):
-                self.dataframe_to_table(df, table_name, input_schema, overwrite=overwrite, schema=schema, temp=temp)
+                self.dataframe_to_table(df, table_name, table_schema=input_schema, overwrite=overwrite, schema=schema, temp=temp)
         else:
-            self.dataframe_to_table(df, table_name, input_schema, overwrite=overwrite, schema=schema, temp=temp)
+            self.dataframe_to_table(df, table_name, table_schema=input_schema, overwrite=overwrite, schema=schema, temp=temp)
 
     def bulk_csv_to_table(self, **kwargs):
         print 'Bulk loading data...'
