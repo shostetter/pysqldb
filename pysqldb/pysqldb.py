@@ -17,6 +17,7 @@ class DbConnect:
     def __init__(self, **kwargs):
         self.user = kwargs.get('user', None)
         self.password = kwargs.get('password', None)
+        self.LDAP = kwargs.get('ldap', False)
         self.type = kwargs.get('type', None)
         self.server = kwargs.get('server', None)
         self.database = kwargs.get('database', None)
@@ -65,13 +66,20 @@ class DbConnect:
         if self.type.upper() in ('MS', 'SQL', 'MSSQL', 'SQLSERVER'):
             # standardize types
             self.type = 'MS'
-            self.params = {
-                'DRIVER': 'SQL Server Native Client 10.0',  # 'SQL Server Native Client 10.0',
-                'DATABASE': self.database,
-                'UID': self.user,
-                'PWD': self.password,
-                'SERVER': self.server
-            }
+            if self.LDAP:
+                self.params = {
+                    'DRIVER': 'SQL Server Native Client 10.0',  # 'SQL Server Native Client 10.0',
+                    'DATABASE': self.database,
+                    'SERVER': self.server
+                }
+            else:
+                self.params = {
+                    'DRIVER': 'SQL Server Native Client 10.0',  # 'SQL Server Native Client 10.0',
+                    'DATABASE': self.database,
+                    'UID': self.user,
+                    'PWD': self.password,
+                    'SERVER': self.server
+                }
             # need catch for missing drivers
             # native client is required for correct handling of datetime2 types in SQL
             try:
@@ -129,15 +137,16 @@ class DbConnect:
         print ('\nAdditional database connection details required:')
         if not self.type:
             self.type = raw_input('Database type (MS/PG)').upper()
-        if not self.database:
-            self.database = raw_input('Database name:')
         if not self.server:
             self.server = raw_input('Server:')
+        if not self.database:
+            self.database = raw_input('Database name:')
         if not self.user:
-            self.user = raw_input('User name ({}):'.format(
-                self.database.lower()))
-        self.password = getpass.getpass('Password ({})'.format(
-            self.database.lower()))
+            if not self.LDAP:
+                self.user = raw_input('User name ({}):'.format(
+                    self.database.lower()))
+                self.password = getpass.getpass('Password ({})'.format(
+                    self.database.lower()))
 
     def query(self, query, **kwargs):
         """
