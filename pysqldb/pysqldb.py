@@ -160,6 +160,7 @@ class DbConnect:
             if not self.LDAP:
                 self.user = raw_input('User name ({}):'.format(
                     self.database.lower()))
+        if not self.password:
                 self.password = getpass.getpass('Password ({})'.format(
                     self.database.lower()))
 
