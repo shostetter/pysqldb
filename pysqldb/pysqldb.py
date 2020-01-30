@@ -14,7 +14,22 @@ import decimal
 
 
 class DbConnect:
+    """
+    Database Connection class. Contains db connection, query, inport/export tools
+    """
+
     def __init__(self, **kwargs):
+        """
+
+        :param kwargs: 
+            user (string):
+            password (string):
+            ldap (bool):
+            type (string):
+            server (string):
+            database (string):
+            port (int):
+        """
         self.user = kwargs.get('user', None)
         self.password = kwargs.get('password', None)
         self.LDAP = kwargs.get('ldap', False)
@@ -367,9 +382,11 @@ class DbConnect:
         if df.shape[0] > 999:
             # try to bulk load on failure should revert to insert method
             if not self.bulk_csv_to_table(input_schema=input_schema, **kwargs):
-                self.dataframe_to_table(df, table_name, table_schema=input_schema, overwrite=overwrite, schema=schema, temp=temp)
+                self.dataframe_to_table(df, table_name, table_schema=input_schema, overwrite=overwrite, schema=schema,
+                                        temp=temp)
         else:
-            self.dataframe_to_table(df, table_name, table_schema=input_schema, overwrite=overwrite, schema=schema, temp=temp)
+            self.dataframe_to_table(df, table_name, table_schema=input_schema, overwrite=overwrite, schema=schema,
+                                    temp=temp)
 
     def bulk_csv_to_table(self, **kwargs):
         print 'Bulk loading data...'
@@ -1378,6 +1395,12 @@ def clean_out_log(dbo, schema, table, owner):
     ), strict=False, timeme=False, no_comment=True)
 
 
+def print_cmd_string(password_list, cmd_string):
+    for p in password_list:
+        cmd_string = cmd_string.replace(p, '*'*len(p))
+    return cmd_string
+
+
 def pg_to_sql(pg, ms, org_table, **kwargs):
     """
     Migrates tables from Postgres to SQL Server, generates spatial tables in MS if spatial in PG.
@@ -1385,11 +1408,13 @@ def pg_to_sql(pg, ms, org_table, **kwargs):
     :param ms: DbConnect instance connecting to SQL Server destination database
     :param org_table: table name of table to migrate
     :param kwargs: 
+        :ldap (bool): Flag for using LDAP credentials (defaults to False)
         :org_schema: PostgreSQL schema for origin table (defaults to public)
         :dest_schema: SQL Server schema for destination table (defaults to dbo) 
         :print_cmd: Option to print he ogr2ogr command line statement (defaults to False) - used for debugging
     :return: 
     """
+    LDAP = kwargs.get('ldap', False)
     spatial = kwargs.get('spatial', False)
     org_schema = kwargs.get('org_schema', 'public')
     dest_schema = kwargs.get('dest_schema', 'dbo')
@@ -1398,32 +1423,55 @@ def pg_to_sql(pg, ms, org_table, **kwargs):
         spatial = '-a_srs EPSG:2263 '
     else:
         spatial = ' '
-    cmd = """
-    ogr2ogr -overwrite -update -f MSSQLSpatial "MSSQL:server={ms_server};database={ms_db};UID={ms_user};PWD={ms_pass}" 
-    PG:"host={pg_host} port={pg_port} dbname={pg_database} user={pg_user} password={pg_pass}" 
-    {pg_schema}.{pg_table} -lco OVERWRITE=yes -lco SCHEMA={ms_schema} {spatial}-progress 
-    --config MSSQLSPATIAL_USE_GEOMETRY_COLUMNS NO
-    """.format(
-        ms_pass=ms.password,
-        ms_user=ms.user,
-        pg_pass=pg.password,
-        pg_user=pg.user,
-        ms_server=ms.server,
-        ms_db=ms.database,
-        pg_host=pg.server,
-        pg_port=pg.port,
-        pg_database=pg.database,
-        pg_schema=org_schema,
-        pg_table=org_table,
-        ms_schema=dest_schema,
-        spatial=spatial
-    )
+    if LDAP:
+        cmd = """
+                ogr2ogr -overwrite -update -f MSSQLSpatial "MSSQL:server={ms_server};database={ms_db};UID={ms_user};PWD={ms_pass}" 
+                PG:"host={pg_host} port={pg_port} dbname={pg_database} user={pg_user} password={pg_pass}" 
+                {pg_schema}.{pg_table} -lco OVERWRITE=yes -lco SCHEMA={ms_schema} {spatial}-progress 
+                --config MSSQLSPATIAL_USE_GEOMETRY_COLUMNS NO
+                """.format(
+            ms_pass='',
+            ms_user='',
+            pg_pass=pg.password,
+            pg_user=pg.user,
+            ms_server=ms.server,
+            ms_db=ms.database,
+            pg_host=pg.server,
+            pg_port=pg.port,
+            pg_database=pg.database,
+            pg_schema=org_schema,
+            pg_table=org_table,
+            ms_schema=dest_schema,
+            spatial=spatial
+        )
+    else:
+        cmd = """
+        ogr2ogr -overwrite -update -f MSSQLSpatial "MSSQL:server={ms_server};database={ms_db};UID={ms_user};PWD={ms_pass}" 
+        PG:"host={pg_host} port={pg_port} dbname={pg_database} user={pg_user} password={pg_pass}" 
+        {pg_schema}.{pg_table} -lco OVERWRITE=yes -lco SCHEMA={ms_schema} {spatial}-progress 
+        --config MSSQLSPATIAL_USE_GEOMETRY_COLUMNS NO
+        """.format(
+            ms_pass=ms.password,
+            ms_user=ms.user,
+            pg_pass=pg.password,
+            pg_user=pg.user,
+            ms_server=ms.server,
+            ms_db=ms.database,
+            pg_host=pg.server,
+            pg_port=pg.port,
+            pg_database=pg.database,
+            pg_schema=org_schema,
+            pg_table=org_table,
+            ms_schema=dest_schema,
+            spatial=spatial
+        )
     if print_cmd:
-        print cmd
+        print print_cmd_string([ms.password, pg.password], cmd)
     subprocess.call(cmd.replace('\n', ' '), shell=True)
 
 
 def sql_to_pg_qry(ms, pg, query, **kwargs):
+    LDAP = kwargs.get('ldap', False)
     spatial = kwargs.get('spatial', True)
     dest_schema = kwargs.get('dest_schema', 'public')
     print_cmd = kwargs.get('print_cmd', False)
@@ -1434,29 +1482,52 @@ def sql_to_pg_qry(ms, pg, query, **kwargs):
         spatial = 'MSSQLSpatial'
     else:
         spatial = 'MSSQL'
-    cmd = """
-        ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
-        user={pg_user} password={pg_pass}" -f {spatial} "MSSQL:server={ms_server};database={ms_database};
-        UID={ms_user};PWD={ms_pass}" -sql "{sql_select}" -lco OVERWRITE=yes 
-        -lco SCHEMA={pg_schema} -nln {table_name} -progress
-        """.format(
-        ms_pass=ms.password,
-        ms_user=ms.user,
-        pg_pass=pg.password,
-        pg_user=pg.user,
-        ms_server=ms.server,
-        ms_db=ms.database,
-        pg_host=pg.server,
-        pg_port=pg.port,
-        ms_database=ms.database,
-        pg_database=pg.database,
-        pg_schema=dest_schema,
-        sql_select=query,
-        spatial=spatial,
-        table_name=table_name
-    )
+    if LDAP:
+        cmd = """
+            ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
+            user={pg_user} password={pg_pass}" -f {spatial} "MSSQL:server={ms_server};database={ms_database};
+            UID={ms_user};PWD={ms_pass}" -sql "{sql_select}" -lco OVERWRITE=yes 
+            -lco SCHEMA={pg_schema} -nln {table_name} -progress
+            """.format(
+            ms_pass='',
+            ms_user='',
+            pg_pass=pg.password,
+            pg_user=pg.user,
+            ms_server=ms.server,
+            ms_db=ms.database,
+            pg_host=pg.server,
+            pg_port=pg.port,
+            ms_database=ms.database,
+            pg_database=pg.database,
+            pg_schema=dest_schema,
+            sql_select=query,
+            spatial=spatial,
+            table_name=table_name
+        )
+    else:
+        cmd = """
+                ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
+                user={pg_user} password={pg_pass}" -f {spatial} "MSSQL:server={ms_server};database={ms_database};
+                UID={ms_user};PWD={ms_pass}" -sql "{sql_select}" -lco OVERWRITE=yes 
+                -lco SCHEMA={pg_schema} -nln {table_name} -progress
+                """.format(
+            ms_pass=ms.password,
+            ms_user=ms.user,
+            pg_pass=pg.password,
+            pg_user=pg.user,
+            ms_server=ms.server,
+            ms_db=ms.database,
+            pg_host=pg.server,
+            pg_port=pg.port,
+            ms_database=ms.database,
+            pg_database=pg.database,
+            pg_schema=dest_schema,
+            sql_select=query,
+            spatial=spatial,
+            table_name=table_name
+        )
     if print_cmd:
-        print cmd
+        print print_cmd_string([ms.password, pg.password], cmd)
     subprocess.call(cmd.replace('\n', ' '), shell=True)
 
 
@@ -1467,11 +1538,13 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
     :param pg: DbConnect instance connecting to PostgreSQL source database
     :param org_table: table name of table to migrate
     :param kwargs: 
+        :ldap (bool): Flag for using LDAP credentials (defaults to False)
         :org_schema: SQL Server schema for origin table (defaults to dbo) 
         :dest_schema: PostgreSQL schema for destination table (defaults to public)
         :print_cmd: Option to print he ogr2ogr command line statement (defaults to False) - used for debugging
     :return: 
     """
+    LDAP = kwargs.get('ldap', False)
     spatial = kwargs.get('spatial', True)
     org_schema = kwargs.get('org_schema', 'dbo')
     dest_schema = kwargs.get('dest_schema', 'public')
@@ -1480,30 +1553,54 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
         spatial = 'MSSQLSpatial'
     else:
         spatial = 'MSSQL'
-    cmd = """
-    ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
-    user={pg_user} password={pg_pass}" -f {spatial} "MSSQL:server={ms_server};database={ms_database};
-    UID={ms_user};PWD={ms_pass}" {ms_schema}.{ms_table} -lco OVERWRITE=yes 
-    -lco SCHEMA={pg_schema} -progress
-    """.format(
-        ms_pass=ms.password,
-        ms_user=ms.user,
-        pg_pass=pg.password,
-        pg_user=pg.user,
-        ms_server=ms.server,
-        ms_db=ms.database,
-        pg_host=pg.server,
-        pg_port=pg.port,
-        ms_database=ms.database,
-        pg_database=pg.database,
-        pg_schema=dest_schema,
-        pg_table=org_table,
-        ms_table=org_table,
-        ms_schema=org_schema,
-        spatial=spatial
-    )
+    if LDAP:
+        cmd = """
+        ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
+        user={pg_user} password={pg_pass}" -f {spatial} "MSSQL:server={ms_server};database={ms_database};
+        UID={ms_user};PWD={ms_pass}" {ms_schema}.{ms_table} -lco OVERWRITE=yes 
+        -lco SCHEMA={pg_schema} -progress
+        """.format(
+            ms_pass='',
+            ms_user='',
+            pg_pass=pg.password,
+            pg_user=pg.user,
+            ms_server=ms.server,
+            ms_db=ms.database,
+            pg_host=pg.server,
+            pg_port=pg.port,
+            ms_database=ms.database,
+            pg_database=pg.database,
+            pg_schema=dest_schema,
+            pg_table=org_table,
+            ms_table=org_table,
+            ms_schema=org_schema,
+            spatial=spatial
+        )
+    else:
+        cmd = """
+        ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={pg_host} port={pg_port} dbname={pg_database} 
+        user={pg_user} password={pg_pass}" -f {spatial} "MSSQL:server={ms_server};database={ms_database};
+        UID={ms_user};PWD={ms_pass}" {ms_schema}.{ms_table} -lco OVERWRITE=yes 
+        -lco SCHEMA={pg_schema} -progress
+        """.format(
+            ms_pass=ms.password,
+            ms_user=ms.user,
+            pg_pass=pg.password,
+            pg_user=pg.user,
+            ms_server=ms.server,
+            ms_db=ms.database,
+            pg_host=pg.server,
+            pg_port=pg.port,
+            ms_database=ms.database,
+            pg_database=pg.database,
+            pg_schema=dest_schema,
+            pg_table=org_table,
+            ms_table=org_table,
+            ms_schema=org_schema,
+            spatial=spatial
+        )
     if print_cmd:
-        print cmd
+        print print_cmd_string([ms.password, pg.password], cmd)
     subprocess.call(cmd.replace('\n', ' '), shell=True)
 
 
@@ -1514,7 +1611,7 @@ def pg_to_pg(from_pg, to_pg, org_table, **kwargs):
     dest_name = kwargs.get('dest_name', org_table)
     cmd = """
     ogr2ogr -overwrite -update -f "PostgreSQL" PG:"host={to_pg_host} port={to_pg_port} dbname={to_pg_database} 
-    user={to_pg_user} password={to_pg_pass}" -f "PostgreSQL" PG:"host={from_pg_host} port={from_pg_port} 
+    user={to_pg_user} password={to_pg_pass}" PG:"host={from_pg_host} port={from_pg_port} 
     dbname={from_pg_database}  user={from_pg_user} password={from_pg_pass}" {from_pg_schema}.{from_pg_table} 
     -lco OVERWRITE=yes -lco SCHEMA={to_pg_schema} -nln {to_pg_name} -progress
     """.format(
@@ -1534,5 +1631,5 @@ def pg_to_pg(from_pg, to_pg, org_table, **kwargs):
         to_pg_name=dest_name
     )
     if print_cmd:
-        print cmd
+        print print_cmd_string([from_pg.password, to_pg.password], cmd)
     subprocess.call(cmd.replace('\n', ' '), shell=True)
