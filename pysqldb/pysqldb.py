@@ -1531,6 +1531,7 @@ def sql_to_pg_qry(ms, pg, query, **kwargs):
     if print_cmd:
         print print_cmd_string([ms.password, pg.password], cmd)
     subprocess.call(cmd.replace('\n', ' '), shell=True)
+    clean_geom_column(pg, table_name, dest_schema)
 
 
 def sql_to_pg(ms, pg, org_table, **kwargs):
@@ -1604,6 +1605,7 @@ def sql_to_pg(ms, pg, org_table, **kwargs):
     if print_cmd:
         print print_cmd_string([ms.password, pg.password], cmd)
     subprocess.call(cmd.replace('\n', ' '), shell=True)
+    clean_geom_column(pg, org_table, dest_schema)
 
 
 def pg_to_pg(from_pg, to_pg, org_table, **kwargs):
@@ -1635,3 +1637,19 @@ def pg_to_pg(from_pg, to_pg, org_table, **kwargs):
     if print_cmd:
         print print_cmd_string([from_pg.password, to_pg.password], cmd)
     subprocess.call(cmd.replace('\n', ' '), shell=True)
+    clean_geom_column(to_pg, dest_name, dest_schema)
+
+
+def clean_geom_column(db, table, schema):
+    # check if there is a geom column
+    # rename column to geom (only if wkb_geom) otherwise could cause issues if more than 1 geom
+    db.query("""SELECT COLUMN_NAME 
+                FROM information_schema.COLUMNS 
+                WHERE data_type='USER-DEFINED' 
+                and TABLE_NAME='{t}'
+                and table_schema = '{s}'
+            """.format(t=table, s=schema), timeme=False)
+    if db.data:
+        if db.data[-1][0] == 'wkb_geometry':
+            db.query("ALTER TABLE {s}.{t} RENAME COLUMN wkb_geometry to geom".format(t=table, s=schema),
+                     timeme=False)
