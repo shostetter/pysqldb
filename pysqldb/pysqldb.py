@@ -793,6 +793,7 @@ class Query:
         self.data_columns = None
         self.data = None
         self.new_tables = list()
+        self.renamed_tables = list()
         self.query()
         self.auto_comment()
         self.run_table_logging()
@@ -841,9 +842,13 @@ class Query:
         if cur.description is None:
             self.dbo.conn.commit()
             self.new_tables = self.query_creates_table()
+            self.renamed_tables = self.query_renames_table()
             if self.permission:
                 for t in self.new_tables:
                     self.dbo.query('grant select on {t} to public;'.format(t=t), timeme=False)
+            if self.renamed_tables:
+                for i in self.renamed_tables.keys():
+                    self.rename_index(i, self.renamed_tables[i])
         else:
             self.query_data(cur)
 
@@ -900,6 +905,37 @@ class Query:
             return [i.pop() for i in new_tables]
         else:
             return []
+
+    def query_renames_table(self):
+        new_tables = dict()
+        rename_tables = r'(alter table\s+)([\w]*\.)?([\w]*)\s+(rename to\s+)([\w]*)'
+        matches = re.findall(rename_tables, self.query_string.lower())
+        for row in matches:
+            if row:
+                old_schema = row[1]
+                old_table = row[2]
+                new_table = row[-1]
+                new_tables[old_schema+new_table] = old_table
+        return new_tables
+
+    def rename_index(self, new_table, old_table):
+        # get indecies for new table
+        sch, tbl = new_table.split('.')
+        self.dbo.query("""
+            SELECT indexname
+            FROM pg_indexes
+            WHERE tablename = '{t}'
+             AND schemaname='{s}';
+        """.format(t=tbl, s=sch), timeme=False)
+        indecies = self.dbo.data
+        for idx in indecies:
+            if old_table in idx[0]:
+                new_idx = idx[0].replace(old_table, tbl)
+                self.dbo.query("ALTER INDEX IF EXISTS {s}.{i} RENAME to {i2}".format(
+                    s=sch, i=idx[0], i2=new_idx
+                ), timeme=False)
+
+
 
     def auto_comment(self):
         """
@@ -1653,3 +1689,4 @@ def clean_geom_column(db, table, schema):
         if db.data[-1][0] == 'wkb_geometry':
             db.query("ALTER TABLE {s}.{t} RENAME COLUMN wkb_geometry to geom".format(t=table, s=schema),
                      timeme=False)
+
