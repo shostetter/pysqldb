@@ -1179,6 +1179,7 @@ class Shapefile:
             self.path = os.path.dirname(filename)
         if not self.table:
             self.table = self.shp_name.replace('.shp', '').lower()
+        self.table = self.table.lower()
 
         if self.table_exists():
             # clean up spatial index
