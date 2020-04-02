@@ -1693,4 +1693,3 @@ def clean_geom_column(db, table, schema):
         if db.data[-1][0] == 'wkb_geometry':
             db.query("ALTER TABLE {s}.{t} RENAME COLUMN wkb_geometry to geom".format(t=table, s=schema),
                      timeme=False)
-
