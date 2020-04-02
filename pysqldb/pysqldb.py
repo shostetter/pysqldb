@@ -410,12 +410,14 @@ class DbConnect:
             PG:"host={server} 
             user={user} 
             dbname={db} 
-            password={password}" 
+            password={password}
+            port={port}"
             {f} 
             -oo EMPTY_STRING_AS_NULL=YES
             -nln "{schema}.stg_{tbl}" 
             """.format(t=types[self.type],
                        server=self.server,
+                       port=self.port,
                        user=self.user,
                        password=self.password,
                        db=self.database,
@@ -425,7 +427,7 @@ class DbConnect:
                        )
         else:
             cmd = """ogr2ogr -f "{t}" "MSSQL:server={server}; 
-                     UID={user}; database={db}; PWD={password}" 
+                     UID={user}; database={db}; PWD={password}"
                      -nln "{schema}.stg_{tbl}" 
                      {f} 
                      -oo EMPTY_STRING_AS_NULL=YES
