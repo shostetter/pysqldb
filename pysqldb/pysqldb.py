@@ -576,11 +576,12 @@ class DbConnect:
         shp_name = kwargs.get('shp_name', None)
         cmd = kwargs.get('cmd', None)
         srid = kwargs.get('srid', '2263')
+        port = dbo.port
         gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
         precision = kwargs.get('precision', False),
         private = kwargs.get('private', False)
         shp = Shapefile(dbo=dbo, path=path, table=table, schema=schema, shp_name=shp_name,
-                        cmd=cmd, srid=srid, gdal_data_loc=gdal_data_loc)
+                        cmd=cmd, srid=srid, gdal_data_loc=gdal_data_loc, port=port)
         shp.read_shp(precision, private)
 
     def feature_class_to_table(self, **kwargs):
@@ -1089,6 +1090,7 @@ class Shapefile:
         self.shp_name = kwargs.get('shp_name', None)
         self.cmd = kwargs.get('cmd', None)
         self.srid = kwargs.get('srid', '2263')
+        self.port = kwargs.get('port', 5432)
         self.gdal_data_loc = kwargs.get('gdal_data_loc', r"C:\Program Files (x86)\GDAL\gdal-data")
         self.connect()
 
@@ -1166,6 +1168,7 @@ class Shapefile:
                 ), strict=False)
 
     def read_shp(self, precision=False, private=False):
+        port = self.port
         if precision:
             precision = '-lco precision=NO'
         else:
@@ -1184,7 +1187,7 @@ class Shapefile:
             self.dbo.query("DROP TABLE IF EXISTS {s}.{t} CASCADE".format(s=self.schema, t=self.table))
 
         cmd = 'ogr2ogr --config GDAL_DATA "{gdal_data}" -nlt PROMOTE_TO_MULTI -overwrite -a_srs ' \
-              'EPSG:{srid} -progress -f "PostgreSQL" PG:"host={host} port=5432 dbname={dbname} ' \
+              'EPSG:{srid} -progress -f "PostgreSQL" PG:"host={host} port={port} dbname={dbname} ' \
               'user={user} password={password}" "{shp}" -nln {schema}.{tbl_name} {perc} '.format(
             gdal_data=self.gdal_data_loc,
             srid=self.srid,
@@ -1195,9 +1198,9 @@ class Shapefile:
             shp=os.path.join(self.path, self.shp_name).lower(),
             schema=self.schema,
             tbl_name=self.table,
-            perc=precision
+            perc=precision,
+            port=port
         )
-
         subprocess.call(cmd, shell=True)
 
         self.dbo.query("""comment on table {s}."{t}" is '{t} created by {u} on {d}
@@ -1689,4 +1692,3 @@ def clean_geom_column(db, table, schema):
         if db.data[-1][0] == 'wkb_geometry':
             db.query("ALTER TABLE {s}.{t} RENAME COLUMN wkb_geometry to geom".format(t=table, s=schema),
                      timeme=False)
-
