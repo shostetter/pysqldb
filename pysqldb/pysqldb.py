@@ -923,7 +923,14 @@ class Query:
 
     def rename_index(self, new_table, old_table):
         # get indecies for new table
-        sch, tbl = new_table.split('.')
+        if '.' in new_table:
+            sch, tbl = new_table.split('.')
+        else:
+            tbl = new_table
+            if self.dbo.type =='PG':
+                sch='public'
+            else:
+                sch='dbo'
         self.dbo.query("""
             SELECT indexname
             FROM pg_indexes
