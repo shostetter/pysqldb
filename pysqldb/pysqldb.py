@@ -41,9 +41,12 @@ class DbConnect:
         self.conn = None
         self.queries = list()
         self.connection_start = None
+        self.tables_created = list()
+        self.data = None
+        self.default_schema = self.get_default_schema
         self.connect()
         self.clean_logs()
-        self.data = None
+
         # self.pid = self.get_pid()
 
     def __str__(self):
@@ -108,6 +111,16 @@ class DbConnect:
         self.connection_start = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         if not quiet:
             print (self)
+
+    def get_default_schema(self):
+        """
+        Gets default schema name depending on db type
+        :return: 
+        """
+        if self.type == 'MS':
+            return 'dbo'
+        elif self.type == 'PG':
+            return 'public'
 
     def get_pid(self):
         if self.type == 'PG':
@@ -188,6 +201,18 @@ class DbConnect:
         self.queries.append(qry)
         self.refresh_connection()
         self.data = qry.data
+        self.tables_created += [i for i in qry.new_tables]
+
+    def drop_table(self, schema, table):
+        """
+        Drops table from database and removes from the temp log table
+        :param schema: schema 
+        :param table: table name
+        :return: 
+        """
+        self.query('DROP TABLE IF EXISTS {}."{}"'.format(schema, table), timeme=False)
+        self.query("""DELETE FROM {s}."{tmp}" WHERE table_schema = '{s}' AND table_name = '{t}'""".format(
+            s=schema, t=table, tmp='__temp_log_table_%s__' % self.user), timeme=False)
 
     def dfquery(self, query, timeme=False):
         """
@@ -286,9 +311,7 @@ class DbConnect:
         :return: Table schema that was created from DataFrame
         """
         overwrite = kwargs.get('overwrite', False)
-        schema = kwargs.get('schema', 'public')
-        if self.type == 'MS':
-            schema = kwargs.get('schema', 'dbo')
+        schema = kwargs.get('schema', self.default_schema )
         temp = kwargs.get('temp', True)
         input_schema = list()
 
@@ -330,11 +353,10 @@ class DbConnect:
         overwrite = kwargs.get('overwrite', False)
         temp = kwargs.get('temp', True)
         table_schema = kwargs.get('table_schema', None)
-        schema = kwargs.get('schema', 'public')
+        schema = kwargs.get('schema',self.default_schema)
+
         if not table_schema:
             table_schema = self.dataframe_to_table_schema(df, table_name, overwrite=overwrite, schema=schema, temp=temp)
-        if self.type == 'MS':
-            schema = kwargs.get('schema', 'dbo')
         # insert data
         print 'Reading data into Database\n'
         for _, row in tqdm(df.iterrows()):
@@ -363,13 +385,11 @@ class DbConnect:
         """
         input_file = kwargs.get('input_file', None)
         overwrite = kwargs.get('overwrite', False)
-        schema = kwargs.get('schema', 'public')
+        schema = kwargs.get('schema', self.default_schema )
         table_name = kwargs.get('table_name', '_{u}_{d}'.format(
             u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
         temp = kwargs.get('temp', True)
         sep = kwargs.get('sep', ',')
-        if self.type == 'MS':
-            schema = kwargs.get('schema', 'dbo')
         if not input_file:
             input_file = file_loc('file')
         # use pandas to get existing data and schema
@@ -393,11 +413,8 @@ class DbConnect:
     def bulk_csv_to_table(self, **kwargs):
         print 'Bulk loading data...'
         input_file = kwargs.get('input_file', None)
+        schema = kwargs.get('schema', self.default_schema)
 
-        if self.type == 'MS':
-            schema = kwargs.get('schema', 'dbo')
-        else:
-            schema = kwargs.get('schema', 'public')
         table_name = kwargs.get('table_name', '_{u}_{d}'.format(
             u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
         sep = kwargs.get('sep', ',')
@@ -480,7 +497,7 @@ class DbConnect:
             input_file (str): File path to csv file
             sheet_name : str, int, list, or None, default 0
             overwrite (bool): If table exists in database will overwrite 
-            schema (str): Define schema, defaults to public (PG)/ dbo (MS)
+            schema (str): Define schema, defaults to self.default_schema 
             table_name: (str): name for database table
         :return: 
         """
@@ -490,10 +507,7 @@ class DbConnect:
         table_name = kwargs.get('table_name', '_{u}_{d}'.format(
             u=self.user, d=datetime.datetime.now().strftime('%Y%m%d%H%M')))
         temp = kwargs.get('temp', True)
-        if self.type == 'MS':
-            schema = kwargs.get('schema', 'dbo')
-        else:
-            schema = kwargs.get('schema', 'public')
+        schema = kwargs.get('schema', self.default_schema)
         if not input_file:
             input_file = file_loc('file')
         # use pandas to get existing data and schema
@@ -746,6 +760,17 @@ class DbConnect:
                 ORDER BY 
                     tablename
             """.format(s=schema, u=self.user))
+
+    def clean_up_new_tables(self):
+        for tbl in self.tables_created:
+            if '.' in tbl:
+                schema, table = tbl.split('.')
+            else:
+                schema, table = self.default_schema, tbl
+            self.drop_table(schema, table)
+        print 'Droped %i tables' % len(self.tables_created)
+        # clean out list
+        self.tables_created = list()
 
 
 class Query:

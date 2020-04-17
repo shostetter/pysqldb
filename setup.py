@@ -3,7 +3,7 @@ from distutils.core import setup
 # version = pkg_resources.require("ris")[0].version
 
 setup(name='pysqldb',
-      version='0.0.3',
+      version='1.5.0',
       packages=['pysqldb'],
       description='Basic library to connect to SQL databases',
       install_requires=[
